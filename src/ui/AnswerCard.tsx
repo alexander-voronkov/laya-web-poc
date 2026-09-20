@@ -27,13 +27,13 @@ export function AnswerCard({ question: q, index, answer: ans, telemetry }: Props
   return (
     <div className={`ans-card type-${ans.type}`}>
       <div className="ans-head">
-        <span className="ans-num">Вопрос {index + 1}</span>
+        <span className="ans-num">Question {index + 1}</span>
         <span className="ans-type">{TYPE_LABELS[q.type]}</span>
         <span className="ans-ms">{ms(telemetry.totalMs)}</span>
-        <button className="icon-btn" title="Скопировать ответ с метриками" onClick={copy}>⧉</button>
+        <button className="icon-btn" title="Copy the answer with its metrics" onClick={copy}>⧉</button>
         {copied && (
           <span className={copied === "ok" ? "muted" : "error"}>
-            {copied === "ok" ? "скопировано" : "буфер обмена недоступен"}
+            {copied === "ok" ? "copied" : "clipboard unavailable"}
           </span>
         )}
       </div>
@@ -46,7 +46,7 @@ export function AnswerCard({ question: q, index, answer: ans, telemetry }: Props
       )}
 
       <button className="link-btn" onClick={() => setOpen(!open)}>
-        {open ? "скрыть разбор" : "разбор: токены, время, температура"}
+        {open ? "hide breakdown" : "breakdown: tokens, timing, temperature"}
       </button>
       {open && <Breakdown t={telemetry} act={ans.rl_agent.act_probability} />}
     </div>
@@ -59,7 +59,7 @@ function NoulBody({ p }: { p: number }) {
     <>
       <div className="noul-big">{v.toFixed(1)}%</div>
       <div className="bar"><div className="bar-fill" style={{ width: `${v.toFixed(1)}%` }} /></div>
-      <div className="ans-sub">вероятность «да» (true) · «нет»: {(100 - v).toFixed(1)}%</div>
+      <div className="ans-sub">probability of yes (true) · no: {(100 - v).toFixed(1)}%</div>
     </>
   );
 }
@@ -86,7 +86,7 @@ function ChoiceBody({ q, probabilities, confidence }: {
         {entries.map((e, i) => <DistRow key={e.label} label={e.label} p={e.p} top={i === topIndex} />)}
       </div>
       <div className="ans-sub">
-        топ: {entries[topIndex]?.label ?? "—"} · уверенность {pct(confidence, 0)}
+        top: {entries[topIndex]?.label ?? "—"} · confidence {pct(confidence, 0)}
       </div>
     </>
   );
@@ -113,13 +113,13 @@ function ScoreBody({ q, probabilities, score, confidence }: {
           <div
             className="scale-marker"
             style={{ left: `${Math.min(100, Math.max(0, pos)).toFixed(1)}%` }}
-            title={`ожидание ${score.toFixed(2)}`}
+            title={`expected ${score.toFixed(2)}`}
           />
         </div>
         <div className="scale-ticks">{levels.map((_, i) => <span key={i}>{i}</span>)}</div>
       </div>
       <div className="ans-sub">
-        ожидание {score.toFixed(2)} из {levels.length - 1} · уверенность {pct(confidence, 0)}
+        expected {score.toFixed(2)} of {levels.length - 1} · confidence {pct(confidence, 0)}
       </div>
     </>
   );
@@ -134,7 +134,7 @@ function DistRow({ label, p, top }: { label: string; p: number | null; top: bool
       <div className="dist-bar">
         <div className="dist-fill" style={{ width: p === null ? "0%" : `${(p * 100).toFixed(1)}%` }} />
       </div>
-      <span className={p === null ? "dist-pct muted" : "dist-pct"}>{p === null ? "нет ответа" : pct(p)}</span>
+      <span className={p === null ? "dist-pct muted" : "dist-pct"}>{p === null ? "no answer" : pct(p)}</span>
     </div>
   );
 }
@@ -142,22 +142,22 @@ function DistRow({ label, p, top }: { label: string; p: number | null; top: bool
 function Breakdown({ t, act }: { t: QuestionTelemetry; act: number }) {
   const s = t.stats;
   const rows: [string, string][] = [
-    ["Токены последовательности", `${s.totalTokens} = вопрос ${s.headTokens} + варианты ${s.optionTokens} + текст ${s.stateTokensUsed} + 3 служебных`],
-    ["Текст", s.stateTokensUsed < s.stateTokens
-      ? `${s.stateTokensUsed} из ${s.stateTokens} токенов — хвост отброшен`
-      : `${s.stateTokens} токенов, целиком`],
-    ["Формулировка", s.headTokens < s.headTokensFull
-      ? `${s.headTokens} из ${s.headTokensFull} токенов — конец обрезан`
-      : `${s.headTokensFull} токенов, целиком`],
-    ["Варианты", s.optionsShrunk
-      ? `${s.optionTokens} из ${s.optionTokensFull} токенов — каждый вариант урезан по отдельности`
-      : `${s.optionTokens} токенов, целиком`],
-    ["Время", `всего ${ms(t.totalMs)} · энкодер ${ms(t.encoderMs)} · голова ${ms(t.headMs)} · сборка ${ms(t.buildMs)}`],
-    ["Скорость энкодера", `${(s.totalTokens / (t.encoderMs / 1000)).toFixed(0)} токенов/с`],
-    ["Температура", `${t.temperature.toFixed(4)} (бакет ${t.temperatureBucket}, ${t.options} вариантов)`],
+    ["Sequence tokens", `${s.totalTokens} = question ${s.headTokens} + options ${s.optionTokens} + text ${s.stateTokensUsed} + 3 special`],
+    ["Text", s.stateTokensUsed < s.stateTokens
+      ? `${s.stateTokensUsed} of ${s.stateTokens} tokens — tail dropped`
+      : `${s.stateTokens} tokens, in full`],
+    ["Wording", s.headTokens < s.headTokensFull
+      ? `${s.headTokens} of ${s.headTokensFull} tokens — the end was cut`
+      : `${s.headTokensFull} tokens, in full`],
+    ["Options", s.optionsShrunk
+      ? `${s.optionTokens} of ${s.optionTokensFull} tokens — each option shortened individually`
+      : `${s.optionTokens} tokens, in full`],
+    ["Timing", `total ${ms(t.totalMs)} · encoder ${ms(t.encoderMs)} · head ${ms(t.headMs)} · build ${ms(t.buildMs)}`],
+    ["Encoder throughput", `${(s.totalTokens / (t.encoderMs / 1000)).toFixed(0)} tokens/s`],
+    ["Temperature", `${t.temperature.toFixed(4)} (bucket ${t.temperatureBucket}, ${t.options} options)`],
     // Documented on the model card as saturated at 1.000 on every input tested, so
     // showing it without this line would invite reading signal into a constant.
-    ["act_probability", `${act.toFixed(3)} — на этом чекпойнте голова act насыщена и сигнала не несёт`],
+    ["act_probability", `${act.toFixed(3)} — the act head is saturated on this checkpoint and carries no signal`],
   ];
   return (
     <div className="breakdown">

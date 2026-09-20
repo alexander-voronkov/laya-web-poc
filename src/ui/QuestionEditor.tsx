@@ -2,9 +2,9 @@ import { TYPE_LABELS, type OptionItem, type QuestionItem } from "../questions";
 import type { QuestionBudget } from "../budget";
 
 const QUESTION_PLACEHOLDER: Record<string, string> = {
-  noul: "Например: Is the text emotionally charged?",
-  choice: "Например: What is the main topic of the text?",
-  score: "Например: How formal is the tone of the text?",
+  noul: "e.g. Is the text emotionally charged?",
+  choice: "e.g. What is the main topic of the text?",
+  score: "e.g. How formal is the tone of the text?",
 };
 
 interface Props {
@@ -30,25 +30,25 @@ export function QuestionCard({
   return (
     <div className={`q-card${problem ? " invalid" : ""}`}>
       <div className="q-head">
-        <span className="q-num">Вопрос {index + 1}</span>
+        <span className="q-num">Question {index + 1}</span>
         <span className="q-type">{TYPE_LABELS[q.type]}</span>
         <input
           className="q-id-input"
           value={q.id}
-          title="Ключ, под которым ответ попадёт в JSON. Модели он не показывается."
+          title="The key this answer appears under in the export. Never shown to the model."
           onChange={(e) => set({ id: e.target.value })}
         />
         <div className="q-head-actions">
-          <button className="icon-btn" title="Выше" disabled={index === 0} onClick={() => onMove(-1)}>↑</button>
-          <button className="icon-btn" title="Ниже" disabled={index === total - 1} onClick={() => onMove(1)}>↓</button>
-          <button className="icon-btn" title="Удалить вопрос" onClick={onRemove}>×</button>
+          <button className="icon-btn" title="Move up" disabled={index === 0} onClick={() => onMove(-1)}>↑</button>
+          <button className="icon-btn" title="Move down" disabled={index === total - 1} onClick={() => onMove(1)}>↓</button>
+          <button className="icon-btn" title="Remove question" onClick={onRemove}>×</button>
         </div>
       </div>
 
       {problem && <div className="q-problem">{problem}</div>}
 
       <div className="field">
-        <label>Вопрос</label>
+        <label>Question</label>
         <input
           type="text"
           value={q.text}
@@ -58,42 +58,42 @@ export function QuestionCard({
       </div>
 
       <div className="field">
-        <label>Уточнение (необязательно)</label>
+        <label>Hint (optional)</label>
         <input
           type="text"
           value={q.hint}
-          placeholder="добавляется к формулировке вопроса"
+          placeholder="appended to the question wording"
           onChange={(e) => set({ hint: e.target.value })}
         />
       </div>
 
       {q.type === "noul" && (
         <div className="field">
-          <label>Что значит «да» и «нет» (необязательно)</label>
+          <label>What yes and no mean (optional)</label>
           <div className="crit-grid">
             <input
               type="text"
               value={q.criteriaTrue}
-              placeholder="да — например: yes, the statement holds"
+              placeholder="yes — e.g. yes, the statement holds"
               onChange={(e) => set({ criteriaTrue: e.target.value })}
             />
             <input
               type="text"
               value={q.criteriaFalse}
-              placeholder="нет — например: no, it does not hold"
+              placeholder="no — e.g. no, it does not hold"
               onChange={(e) => set({ criteriaFalse: e.target.value })}
             />
           </div>
           <div className="field-note">
-            Эти две строки заменяют формулировки по умолчанию и стоят несколько токенов — при этом
-            заметно повышают разделимость ответа.
+            These two lines replace the default wording. They cost a handful of tokens and
+            measurably sharpen the answer.
           </div>
         </div>
       )}
 
       {q.type !== "noul" && (
         <div className="field">
-          <label>{isScore ? "Уровни шкалы (по возрастанию)" : "Варианты ответа"}</label>
+          <label>{isScore ? "Scale levels, low to high" : "Options"}</label>
           <div className="opt-list">
             {items.map((o, j) => (
               <div className="opt-row" key={j}>
@@ -101,27 +101,27 @@ export function QuestionCard({
                   type="text"
                   className="opt-label"
                   value={o.label}
-                  placeholder={isScore ? `уровень ${j}` : `вариант ${j + 1}`}
+                  placeholder={isScore ? `level ${j}` : `option ${j + 1}`}
                   onChange={(e) => setItems(items.map((x, i) => (i === j ? { ...x, label: e.target.value } : x)))}
                 />
                 <input
                   type="text"
                   className="opt-desc"
                   value={o.description}
-                  placeholder="описание (необязательно)"
+                  placeholder="description (optional)"
                   onChange={(e) => setItems(items.map((x, i) => (i === j ? { ...x, description: e.target.value } : x)))}
                 />
                 <div className="opt-actions">
                   <button
-                    className="icon-btn" title="Выше" disabled={j === 0}
+                    className="icon-btn" title="Move up" disabled={j === 0}
                     onClick={() => { const n = [...items]; [n[j - 1], n[j]] = [n[j], n[j - 1]]; setItems(n); }}
                   >↑</button>
                   <button
-                    className="icon-btn" title="Ниже" disabled={j === items.length - 1}
+                    className="icon-btn" title="Move down" disabled={j === items.length - 1}
                     onClick={() => { const n = [...items]; [n[j + 1], n[j]] = [n[j], n[j + 1]]; setItems(n); }}
                   >↓</button>
                   <button
-                    className="icon-btn" title="Удалить"
+                    className="icon-btn" title="Remove"
                     onClick={() => setItems(items.filter((_, i) => i !== j))}
                   >×</button>
                 </div>
@@ -129,11 +129,12 @@ export function QuestionCard({
             ))}
           </div>
           <button className="link-btn" onClick={() => setItems([...items, { label: "", description: "" }])}>
-            {isScore ? "+ добавить уровень" : "+ добавить вариант"}
+            {isScore ? "+ add level" : "+ add option"}
           </button>
           {isScore && (
             <div className="field-note">
-              Порядок уровней задаёт шкалу: от низшего к высшему. Ожидание считается по индексам 0…n−1.
+              The order defines the scale, lowest to highest. The expected value is computed
+              over the indices 0…n−1.
             </div>
           )}
         </div>
@@ -152,27 +153,28 @@ function BudgetLine({ budget }: { budget: QuestionBudget }) {
   return (
     <div className="q-budget">
       <span className="muted">
-        токенов: {s.totalTokens} (вопрос {s.headTokens} · варианты {s.optionTokens} · текст {s.stateTokensUsed})
+        tokens: {s.totalTokens} (question {s.headTokens} · options {s.optionTokens} · text {s.stateTokensUsed})
       </span>
       {budget.optionsDontFit && (
-        <span className="error">варианты не помещаются в бюджет головы — вопрос не выполнится</span>
+        <span className="error">the options do not fit the head budget — this question cannot run</span>
       )}
       {budget.optionsShrunk && (
         <span className="warn">
-          варианты урезаны: {s.optionTokensFull} → {s.optionTokens} токенов. Режется каждый вариант
-          по отдельности и посреди слова — модель оценивает уже обрубленные формулировки. Сократите
-          описания или уменьшите число вариантов.
+          options shortened: {s.optionTokensFull} → {s.optionTokens} tokens. Each option is cut
+          individually and mid-word, so the model scores the mangled text. Shorten the descriptions
+          or use fewer options.
         </span>
       )}
       {budget.instructionsClipped && (
         <span className="warn">
-          формулировка обрезана: {s.headTokensFull} → {s.headTokens} токенов. Обрезается конец, то есть
-          сам вопрос — сократите задачу или перенесите её в текст.
+          wording clipped: {s.headTokensFull} → {s.headTokens} tokens. The cut lands on the end,
+          which is the question itself — shorten the task or move it into the text.
         </span>
       )}
       {budget.stateTruncated && (
         <span className="warn">
-          текст обрезан: {s.stateTokens} → {s.stateTokensUsed} токенов, до модели дойдёт только начало.
+          text truncated: {s.stateTokens} → {s.stateTokensUsed} tokens; only the beginning reaches
+          the model.
         </span>
       )}
     </div>

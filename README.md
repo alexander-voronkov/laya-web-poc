@@ -20,9 +20,9 @@ Hosted at **https://laya.voronkov.club** (static build under nginx with the isol
 
 | UI type | Model type | Options scored | Result |
 | --- | --- | --- | --- |
-| Бинарный (0–100) | `noul` | `false: …`, `true: …` | p(true) as a percentage + bar |
-| Выбор из списка | `choice` | one `[MASK]` per option | full probability distribution, top option highlighted |
-| Шкала (ожидание по уровням) | `score` | one `[MASK]` per ordered level | distribution over levels + expected-value marker |
+| Binary (0–100) | `noul` | `false: …`, `true: …` | p(true) as a percentage + bar |
+| Pick one | `choice` | one `[MASK]` per option | full probability distribution, top option highlighted |
+| Ordered scale (expected level) | `score` | one `[MASK]` per ordered level | distribution over levels + expected-value marker |
 
 These are the only three primitives the model has; there is no fourth type to add. A binary question also takes optional descriptions of what *yes* and *no* mean — they replace the default wording, cost a handful of tokens, and measurably sharpen the distribution, so the editor nudges you to fill them in.
 
@@ -40,9 +40,9 @@ The question head has 192 tokens, shared between the instruction text and all of
 
 So the placement is a choice you make in the UI:
 
-- **в формулировку каждого вопроса** — `instructions = <task> <question> <hint>`. Semantically tight, re-encoded per question, and bounded by those 192 tokens.
-- **в начало текста (state)** — the framing is prepended to the text instead, where it draws on the ~300 remaining tokens and leaves the question alone.
-- **и туда, и туда** — for comparing the two.
+- **into every question's wording** — `instructions = <task> <question> <hint>`. Semantically tight, re-encoded per question, and bounded by those 192 tokens.
+- **in front of the text (state)** — the framing is prepended to the text instead, where it draws on the ~300 remaining tokens and leaves the question alone.
+- **both places** — for comparing the two.
 
 Whatever you pick, each question card shows its real token breakdown (question / options / text) and says explicitly when the instruction was clipped or the text truncated. Those numbers come from running the actual sequence builder, not from an estimate.
 
@@ -67,17 +67,17 @@ npm test           # token-parity gate, see below
 
 `.github/workflows/deploy.yml` builds and ships `dist/` to the nginx docroot on every push to `main`, then verifies the live site actually came back with the isolation headers and the ORT runtime — a deploy that does not check is a deploy that goes stale in silence.
 
-It needs four repository secrets, and **fails loudly** rather than skipping if any is missing:
+It needs five repository secrets, and **fails loudly by name** rather than skipping if any is missing — a deploy job that quietly skips itself is indistinguishable from one that worked:
 
 | Secret | Value |
 | --- | --- |
 | `DEPLOY_HOST` | `152.42.224.40` |
-| `DEPLOY_USER` | the rsync user on that host |
+| `DEPLOY_USER` | the rsync user on that host (`laya-deploy`, owns only the docroot, no sudo) |
 | `DEPLOY_SSH_KEY` | private half of a deploy key authorised for that user |
 | `DEPLOY_KNOWN_HOSTS` | `ssh-keyscan 152.42.224.40` output — the host key is pinned, because rsync runs with `--delete` |
-| `DEPLOY_PATH` | optional; defaults to `/srv/laya-web-poc/site` |
+| `DEPLOY_PATH` | the docroot, `/srv/laya-web-poc/site`. Required and asserted absolute: rsync resolves a relative destination against the login user's home, so a mangled path builds a tree under `$HOME` while the real docroot goes on serving the old build |
 
-Until those exist, deploys are done by hand on the host (`git fetch` + `npm run build` + rsync into the docroot).
+The build is stamped with the commit SHA into `dist/version.txt`, and the job then checks that the live site serves *that* SHA. Every other assertion it makes — the isolation headers, the wasm runtime — would pass just as well against the previous deploy. Note also that nginx answers `try_files $uri $uri/ /index.html`, so a missing file comes back as 200 with the HTML page: the runtime check asserts `Content-Type: application/wasm`, not the status code.
 
 ## Hosting requirement: cross-origin isolation
 
@@ -125,13 +125,13 @@ Per page load and per run:
 - per-question table: tokens in the sequence, how much of the text survived truncation, encoder time, head time, total, and the temperature bucket actually applied;
 - share of wall time spent in the encoder, and encoder throughput in tokens/s;
 - token accounting: input tokens, option scores produced, text tokens dropped, and a standing `0` for generated tokens — the model does not generate;
-- `performance.memory.usedJSHeapSize` where available (Chromium): the wasm heap lives **inside** this number, so it includes the model;
+- two memory numbers, because one of them is not the one you want. `performance.memory.usedJSHeapSize` (Chromium) counts the **JavaScript** heap, and the ~600 MB of dequantised weights sit in WebAssembly linear memory outside it. `performance.measureUserAgentSpecificMemory()` does include wasm, and is available here because the page is cross-origin isolated anyway — it sits behind a button, since the browser schedules the measurement when it likes and rate-limits it;
 - `navigator.deviceMemory` and `navigator.storage.estimate()` — whether a 524 MB cache will actually survive on this device;
-- weight cache status (`laya-weights-v1` in Cache Storage), including the case where the cache write failed on quota and the next load will download again.
+- weight cache status (`laya-weights-v1` in Cache Storage), counted against the four files expected: a `put()` that failed on quota leaves a working session behind a partial cache, and summing the bytes that did land would read as success.
 
 Each answer card also expands into a per-question breakdown, including `act_probability` — shown with the caveat that this head is saturated at 1.000 on this checkpoint and carries no signal.
 
-Every run can be exported as JSON (inputs, the exact Jev-shaped model request, answers, metrics) via «Экспорт JSON прогона».
+Every run can be exported as JSON (inputs, the exact Jev-shaped model request, answers, metrics) via "Export the run as JSON".
 
 ## Parity check
 
@@ -142,6 +142,19 @@ npm test    # 24 cases / 26 questions
 ```
 
 It runs on every push and pull request. This is the load-bearing test in the repository: if the token ids drift by one, nothing downstream fails — the page just answers a different question with the same confidence.
+
+## Browser smoke check
+
+The parity test and CI cover everything up to inference. They cannot cover inference itself: whether 524 MB of weights arrive, whether the wasm session builds, and whether a forward pass returns probabilities. That needs a real browser, so it is a script rather than a CI job — it downloads half a gigabyte and is not worth running on every push.
+
+```bash
+npm i -D playwright && npx playwright install chromium
+node scripts/smoke.mjs --local                              # local Chromium
+PLAYWRIGHT_WS=ws://host:9223/ node scripts/smoke.mjs        # a remote Playwright server
+SITE=http://localhost:4173 node scripts/smoke.mjs --local   # against a preview build
+```
+
+It reports `crossOriginIsolated`, how long the weights took, the answers with their distributions, the whole metrics panel, the per-question table, and any console error or failed request. Two screenshots land next to it.
 
 ## Model notes and limits
 

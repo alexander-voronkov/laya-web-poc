@@ -21,15 +21,15 @@ class Boundary extends Component<{ children: ReactNode }, { error: Error | null 
     return (
       <div id="app">
         <section className="card">
-          <h2>Страница упала</h2>
+          <h2>The page crashed</h2>
           <p className="muted">{error.message}</p>
           <p className="muted">
-            Если это повторяется после перезагрузки, виноват сохранённый черновик — сбросьте его.
+            If this repeats after a reload, the saved draft is the cause — reset it.
           </p>
           <div className="add-q-row">
-            <button className="btn" onClick={() => location.reload()}>Перезагрузить</button>
+            <button className="btn" onClick={() => location.reload()}>Reload</button>
             <button className="btn" onClick={() => { clearSession(); location.reload(); }}>
-              Сбросить черновик и перезагрузить
+              Reset the draft and reload
             </button>
           </div>
         </section>

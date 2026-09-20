@@ -35,8 +35,8 @@ export function MemoryProbe() {
   if (!measure) {
     return (
       <span className="muted">
-        performance.measureUserAgentSpecificMemory() недоступен — это Chromium-only и требует
-        cross-origin isolation
+        performance.measureUserAgentSpecificMemory() is unavailable — Chromium only, and it
+        requires cross-origin isolation
       </span>
     );
   }
@@ -61,19 +61,19 @@ export function MemoryProbe() {
   return (
     <span>
       <button className="link-btn" onClick={run} disabled={state === "busy"}>
-        {state === "busy" ? "браузер измеряет…" : state === "done" ? "измерить ещё раз" : "измерить память"}
+        {state === "busy" ? "the browser is measuring…" : state === "done" ? "measure again" : "measure memory"}
       </button>
       {state === "done" && result && (
         <>
           {" "}
-          <b>{mb(result.bytes)} МБ</b> всего в этом процессе
-          {wasmBytes > 0 && <> · из них WebAssembly {mb(wasmBytes)} МБ</>}
+          <b>{mb(result.bytes)} MB</b> in this process
+          {wasmBytes > 0 && <> · of which WebAssembly {mb(wasmBytes)} MB</>}
           {wasmBytes === 0 && result.breakdown && (
-            <> · разбивка без записи WebAssembly — браузер сгруппировал её иначе</>
+            <> · no WebAssembly entry in the breakdown — the browser grouped it differently</>
           )}
         </>
       )}
-      {state === "error" && <span className="error"> не удалось: {error}</span>}
+      {state === "error" && <span className="error"> failed: {error}</span>}
     </span>
   );
 }

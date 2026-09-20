@@ -69,68 +69,68 @@ export function MetricsPanel({ files, stages, cache, session, ready, run }: Prop
 
   const rows: [string, ReactNode][] = [
     [
-      "Загрузка весов",
+      "Weight download",
       ready || loaded
-        ? `${mb(loaded)} МБ${total ? ` из ${mb(total)} МБ` : ""} · ${sec(weightsMs)}${cachedAny ? " · из кэша браузера" : ""}`
-        : `~${mb(NOMINAL_TOTAL_BYTES)} МБ, скачивается…`,
+        ? `${mb(loaded)} MB${total ? ` of ${mb(total)} MB` : ""} · ${sec(weightsMs)}${cachedAny ? " · from the browser cache" : ""}`
+        : `~${mb(NOMINAL_TOTAL_BYTES)} MB, downloading…`,
     ],
     [
-      "Инициализация сессий ORT",
-      encInit || headInit ? `${sec(encInit + headInit)} (энкодер ${sec(encInit)} · голова ${sec(headInit)})` : "—",
+      "ORT session init",
+      encInit || headInit ? `${sec(encInit + headInit)} (encoder ${sec(encInit)} · head ${sec(headInit)})` : "—",
     ],
     [
-      "Wasm-потоки",
+      "Wasm threads",
       threadsEffective === null
         ? "—"
         : threadsEffective === threadsRequested
-          ? `${threadsEffective} из ${cores ?? "?"} ядер · crossOriginIsolated: ✓`
-          : `${threadsEffective} (запрошено ${threadsRequested}, ядер ${cores ?? "?"}) · crossOriginIsolated: ✗`,
+          ? `${threadsEffective} of ${cores ?? "?"} cores · crossOriginIsolated: ✓`
+          : `${threadsEffective} (requested ${threadsRequested}, ${cores ?? "?"} cores) · crossOriginIsolated: ✗`,
     ],
     ...(ready && !isolated
       ? ([[
-          "⚠ Изоляция",
-          "нет cross-origin isolation — SharedArrayBuffer недоступен, wasm считает в один поток, примерно в 6 раз дольше. Число потоков выше выведено из этого факта, а не измерено: ORT не сообщает, на скольких потоках он фактически пошёл. Проверьте заголовки COOP/COEP.",
+          "⚠ Isolation",
+          "no cross-origin isolation — SharedArrayBuffer is unavailable, so wasm runs on one thread and takes roughly 6x longer. The thread count above is derived from that fact, not measured: ORT does not report how many threads it actually used. Check the COOP/COEP headers.",
         ]] as [string, ReactNode][])
       : []),
     [
-      "Время прогона",
+      "Run time",
       qs.length
-        ? `${sec(totalMs)} на ${qs.length} вопр.${run && run.aborted ? ` из ${run.requested} (остановлено)` : ""} · ${ms(totalMs / qs.length)} в среднем · энкодер ${((encoderMs / totalMs) * 100).toFixed(0)}% времени`
+        ? `${sec(totalMs)} for ${qs.length} question${qs.length === 1 ? "" : "s"}${run && run.aborted ? ` of ${run.requested} (stopped)` : ""} · ${ms(totalMs / qs.length)} on average · ${((encoderMs / totalMs) * 100).toFixed(0)}% of it in the encoder`
         : "—",
     ],
     [
-      "Токены",
+      "Tokens",
       qs.length
-        ? `на вход ${inputTokens} · оценено вариантов ${scored}${droppedTokens ? ` · отброшено из текста ${droppedTokens}` : ""} · сгенерировано 0 (модель негенеративная)`
+        ? `${inputTokens} in · ${scored} options scored${droppedTokens ? ` · ${droppedTokens} dropped from the text` : ""} · 0 generated (the model does not generate)`
         : "—",
     ],
     [
-      "Пропускная способность",
-      qs.length ? `${(inputTokens / (encoderMs / 1000)).toFixed(0)} токенов/с через энкодер` : "—",
+      "Throughput",
+      qs.length ? `${(inputTokens / (encoderMs / 1000)).toFixed(0)} tokens/s through the encoder` : "—",
     ],
     [
-      "Память (JS heap)",
+      "Memory (JS heap)",
       // usedJSHeapSize measures the V8 heap. WebAssembly linear memory -- where the
       // ~600MB of dequantised weights actually live -- is a separate backing store and
       // is NOT counted here. Saying otherwise invites reading "142 MB" as the model
       // fitting in 142 MB.
       heap !== null
-        ? `${mb(heap)} МБ — это куча JavaScript; линейная память wasm, где лежат веса, сюда не входит и браузером не раскрывается`
-        : "performance.memory недоступен в этом браузере (есть только в Chromium)",
+        ? `${mb(heap)} MB — this is the JavaScript heap; the wasm linear memory holding the weights is not part of it`
+        : "performance.memory is unavailable in this browser (Chromium only)",
     ],
-    ["Память процесса (вкл. wasm)", <MemoryProbe key="mem" />],
+    ["Process memory (incl. wasm)", <MemoryProbe key="mem" />],
     [
-      "Память устройства",
-      deviceMemory ? `${deviceMemory} ГБ (округление браузера)` : "navigator.deviceMemory недоступен",
+      "Device memory",
+      deviceMemory ? `${deviceMemory} GB (browser-rounded)` : "navigator.deviceMemory is unavailable",
     ],
-    ["Кэш весов", <CacheLine cache={cache} ready={ready} key="cache" />],
+    ["Weight cache", <CacheLine cache={cache} ready={ready} key="cache" />],
     [
-      "Квота хранилища",
+      "Storage quota",
       !storage.available
-        ? "navigator.storage.estimate() недоступен"
+        ? "navigator.storage.estimate() is unavailable"
         : storage.quota === null
-          ? "браузер не сообщает квоту"
-          : `${storage.usage === null ? "занято неизвестно" : `${mb(storage.usage)} МБ занято`} из ~${(storage.quota / 1e9).toFixed(1)} ГБ (оценка браузера)`,
+          ? "the browser does not report a quota"
+          : `${storage.usage === null ? "usage unknown" : `${mb(storage.usage)} MB used`} of ~${(storage.quota / 1e9).toFixed(1)} GB (browser estimate)`,
     ],
   ];
 
@@ -151,17 +151,28 @@ export function MetricsPanel({ files, stages, cache, session, ready, run }: Prop
  *  hundred megabytes: a put() that failed on quota leaves a working session behind an
  *  incomplete cache, and the bytes that did land look like success. */
 function CacheLine({ cache, ready }: { cache: CacheState | null; ready: boolean }) {
-  if (!cache) return <>{ready ? "проверяется…" : "—"}</>;
-  if (cache.unavailable) return <span className="warn">Cache Storage недоступен (приватный режим или запрет на данные сайта) — веса будут скачиваться каждый раз</span>;
-  if (cache.files === 0) return <span className="warn">веса не закэшировались (квота или запрет) — при перезагрузке скачаются заново</span>;
+  if (!cache) return <>{ready ? "checking…" : "—"}</>;
+  if (cache.unavailable)
+    return (
+      <span className="warn">
+        Cache Storage is unavailable (private mode, or site data blocked) — the weights will be
+        downloaded on every visit
+      </span>
+    );
+  if (cache.files === 0)
+    return (
+      <span className="warn">
+        the weights were not cached (quota, or storage blocked) — they will download again on reload
+      </span>
+    );
   if (cache.files < cache.expected)
     return (
       <span className="warn">
-        закэшировано {cache.files} из {cache.expected} файлов ({mb(cache.bytes)} МБ) — скорее всего не хватило квоты;
-        недостающие скачаются заново
+        {cache.files} of {cache.expected} files cached ({mb(cache.bytes)} MB) — most likely the quota
+        ran out; the rest will download again
       </span>
     );
-  return <>{mb(cache.bytes)} МБ, все {cache.expected} файла — следующее открытие без скачивания</>;
+  return <>{mb(cache.bytes)} MB, all {cache.expected} files — the next visit downloads nothing</>;
 }
 
 function PerQuestionTable({ qs }: { qs: QuestionTelemetry[] }) {
@@ -170,8 +181,8 @@ function PerQuestionTable({ qs }: { qs: QuestionTelemetry[] }) {
       <table className="metrics-table">
         <thead>
           <tr>
-            <th>вопрос</th><th>тип</th><th>вар.</th><th>токенов</th>
-            <th>текст</th><th>энкодер</th><th>голова</th><th>всего</th><th>температура</th>
+            <th>question</th><th>type</th><th>opts</th><th>tokens</th>
+            <th>text</th><th>encoder</th><th>head</th><th>total</th><th>temperature</th>
           </tr>
         </thead>
         <tbody>
