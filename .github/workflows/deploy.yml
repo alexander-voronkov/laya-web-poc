@@ -9,6 +9,9 @@ concurrency:
   group: deploy-production
   cancel-in-progress: false
 
+env:
+  SITE: https://laya.voronkov.club
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -27,16 +30,21 @@ jobs:
           HOST: ${{ secrets.DEPLOY_HOST }}
           USER: ${{ secrets.DEPLOY_USER }}
           KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          TARGET: ${{ secrets.DEPLOY_PATH }}
         run: |
           missing=""
           [ -n "$KEY" ]         || missing="$missing DEPLOY_SSH_KEY"
           [ -n "$HOST" ]        || missing="$missing DEPLOY_HOST"
           [ -n "$USER" ]        || missing="$missing DEPLOY_USER"
           [ -n "$KNOWN_HOSTS" ] || missing="$missing DEPLOY_KNOWN_HOSTS"
+          [ -n "$TARGET" ]      || missing="$missing DEPLOY_PATH"
           if [ -n "$missing" ]; then
-            echo "::error::Missing repository secrets:$missing — see README, section «Деплой»."
+            echo "::error::Missing repository secrets:$missing — see README, section «Deploy»."
             exit 1
           fi
+          # rsync runs with --delete against this path. It is not a secret worth hiding
+          # from the log, and a typo in it is exactly what this line is here to reveal.
+          echo "deploy target: $USER@$HOST:$TARGET"
 
       - uses: actions/setup-node@v4
         with:
@@ -44,11 +52,26 @@ jobs:
           cache: npm
 
       - run: npm ci
+
+      # The full gate runs here too, not only in ci.yml. Both workflows trigger on the
+      # same push with no ordering between them, so relying on CI to stop a bad deploy
+      # means the site is already updated by the time CI goes red. The parity test in
+      # particular: a one-token drift produces confident answers to a different
+      # question, and nothing downstream notices.
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Token parity against the reference implementation
+        run: npm test
+
       - run: npm run build
 
-      - name: Sanity-check the bundle before it replaces the live site
+      # The live checks below can all pass against a previous deploy. Something in the
+      # bundle has to identify this build, or "verified" only means "some site is up".
+      - name: Stamp the build
         run: |
           set -euo pipefail
+          printf '%s\n' "$GITHUB_SHA" > dist/version.txt
           test -f dist/index.html
           test -f dist/ort/ort-wasm-simd-threaded.wasm
           test -f dist/ort/ort-wasm-simd-threaded.mjs
@@ -72,25 +95,41 @@ jobs:
         env:
           HOST: ${{ secrets.DEPLOY_HOST }}
           USER: ${{ secrets.DEPLOY_USER }}
-          # Docroot of the nginx server block for laya.voronkov.club.
-          TARGET: ${{ secrets.DEPLOY_PATH || '/srv/laya-web-poc/site' }}
+          TARGET: ${{ secrets.DEPLOY_PATH }}
         run: |
           set -euo pipefail
           rsync -az --delete --checksum \
             -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts" \
             dist/ "$USER@$HOST:$TARGET/"
 
-      # Deploying and then asserting nothing is how a broken deploy stays green. These
-      # two headers are not cosmetic: without cross-origin isolation the page loses
-      # SharedArrayBuffer, falls back to a single wasm thread and runs ~6x slower.
-      - name: Verify the live site
+      # Deploying and then asserting nothing is how a broken deploy stays green.
+      - name: Verify this build is the one being served
         run: |
           set -euo pipefail
-          headers=$(curl -fsS -D - -o /dev/null https://laya.voronkov.club/)
+          # Cache-buster: nginx serves /assets/ with expires 30d, and a CDN or proxy in
+          # front would otherwise answer from the previous deploy.
+          served=$(curl -fsS "$SITE/version.txt?cb=$GITHUB_RUN_ID" | tr -d '\r\n')
+          if [ "$served" != "$GITHUB_SHA" ]; then
+            echo "::error::Live site serves $served, expected $GITHUB_SHA — the upload did not reach the docroot nginx reads."
+            exit 1
+          fi
+          echo "live build: $served"
+
+      # Not cosmetic: without cross-origin isolation the page loses SharedArrayBuffer,
+      # falls back to a single wasm thread and runs ~6x slower.
+      - name: Verify cross-origin isolation
+        run: |
+          set -euo pipefail
+          headers=$(curl -fsS -D - -o /dev/null "$SITE/")
           echo "$headers"
-          echo "$headers" | grep -iq '^cross-origin-opener-policy: *same-origin' \
-            || { echo "::error::COOP header missing on the live site"; exit 1; }
-          echo "$headers" | grep -iq '^cross-origin-embedder-policy: *require-corp' \
-            || { echo "::error::COEP header missing or not require-corp on the live site"; exit 1; }
-          curl -fsS https://laya.voronkov.club/ort/ort-wasm-simd-threaded.wasm -o /dev/null \
-            || { echo "::error::ORT wasm runtime is not being served"; exit 1; }
+          # Anchored to end-of-value: `same-origin-allow-popups` does NOT isolate, and a
+          # prefix match would accept it and report a 6x-slower site as correct.
+          echo "$headers" | tr -d '\r' | grep -iqE '^cross-origin-opener-policy:[[:space:]]*same-origin[[:space:]]*$' \
+            || { echo "::error::COOP is not exactly same-origin"; exit 1; }
+          echo "$headers" | tr -d '\r' | grep -iqE '^cross-origin-embedder-policy:[[:space:]]*require-corp[[:space:]]*$' \
+            || { echo "::error::COEP is not exactly require-corp"; exit 1; }
+          # The wasm runtime lives under /ort/, which nginx serves through a different
+          # location block than /; check the headers survive there too.
+          ort=$(curl -fsS -D - -o /dev/null "$SITE/ort/ort-wasm-simd-threaded.wasm")
+          echo "$ort" | tr -d '\r' | grep -iqE '^cross-origin-embedder-policy:[[:space:]]*require-corp[[:space:]]*$' \
+            || { echo "::error::COEP missing on /ort/ — the wasm runtime would not load isolated"; exit 1; }

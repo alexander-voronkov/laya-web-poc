@@ -157,6 +157,13 @@ function BudgetLine({ budget }: { budget: QuestionBudget }) {
       {budget.optionsDontFit && (
         <span className="error">варианты не помещаются в бюджет головы — вопрос не выполнится</span>
       )}
+      {budget.optionsShrunk && (
+        <span className="warn">
+          варианты урезаны: {s.optionTokensFull} → {s.optionTokens} токенов. Режется каждый вариант
+          по отдельности и посреди слова — модель оценивает уже обрубленные формулировки. Сократите
+          описания или уменьшите число вариантов.
+        </span>
+      )}
       {budget.instructionsClipped && (
         <span className="warn">
           формулировка обрезана: {s.headTokensFull} → {s.headTokens} токенов. Обрезается конец, то есть

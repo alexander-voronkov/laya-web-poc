@@ -8,6 +8,11 @@ export interface OptionItem {
 export type QuestionType = "noul" | "choice" | "score";
 
 export interface QuestionItem {
+  /** Stable React identity. Separate from `id` on purpose: `id` is an editable field,
+   *  and keying the list by it remounts the card on every keystroke, which takes the
+   *  focus out of the very input being typed into. Never shown to the model. */
+  uid: string;
+  /** The key this question's answer appears under, in the request and the export. */
   id: string;
   type: QuestionType;
   text: string;
@@ -44,8 +49,12 @@ export const FRAMING_LABELS: Record<FramingMode, string> = {
   both: "и туда, и туда",
 };
 
+let uidSeq = 0;
+export const newUid = () => `u${Date.now().toString(36)}-${(uidSeq++).toString(36)}`;
+
 export function newQuestion(type: QuestionType, n: number): QuestionItem {
   const q: QuestionItem = {
+    uid: newUid(),
     id: `q${n}`,
     type,
     text: "",
@@ -100,6 +109,21 @@ function noulCriteria(q: QuestionItem): Record<string, string> | null {
   return Object.keys(c).length ? c : null;
 }
 
+/** The options that will actually be scored, in the order the model will see them.
+ *
+ *  One definition, used by the request builder, the budget analysis and the answer
+ *  cards alike. They diverged before: validation counted `filter(Boolean)` labels
+ *  while the request sent every row, so a blank row became a real scored option
+ *  (`"level 3: "`) that the cards then filtered out of the display — and for `score`,
+ *  filtering the *display* while the model indexed the *unfiltered* list put every
+ *  label next to its neighbour's probability. Anything blank is dropped here, once. */
+export function scoredItems(q: QuestionItem): OptionItem[] {
+  const items = q.type === "score" ? q.levels : q.type === "choice" ? q.options : [];
+  return items
+    .map((o) => ({ label: o.label.trim(), description: o.description.trim() }))
+    .filter((o) => o.label);
+}
+
 /** Map our UI question onto the Jev request shape the model port accepts. */
 export function toQuestionDef(task: string, q: QuestionItem, mode: FramingMode): QuestionDef {
   const instructions = buildInstructions(task, q, mode);
@@ -107,17 +131,14 @@ export function toQuestionDef(task: string, q: QuestionItem, mode: FramingMode):
     return {
       type: "choice",
       instructions,
-      criteria: Object.fromEntries(q.options.map((o) => [o.label.trim(), o.description.trim() || null])),
+      criteria: Object.fromEntries(scoredItems(q).map((o) => [o.label, o.description || null])),
     };
   }
   if (q.type === "score") {
     return {
       type: "score",
       instructions,
-      criteria: q.levels.map((l) => {
-        const d = l.description.trim();
-        return d ? `${l.label.trim()}: ${d}` : l.label.trim();
-      }),
+      criteria: scoredItems(q).map((l) => (l.description ? `${l.label}: ${l.description}` : l.label)),
     };
   }
   return { type: "noul", instructions, criteria: noulCriteria(q) };
@@ -128,12 +149,12 @@ export function toRequest(task: string, qs: QuestionItem[], mode: FramingMode): 
 }
 
 export function countOptions(q: QuestionItem): number {
-  if (q.type === "noul") return 2;
-  return (q.type === "score" ? q.levels : q.options).filter((o) => o.label.trim()).length;
+  return q.type === "noul" ? 2 : scoredItems(q).length;
 }
 
 export interface ValidationIssue {
-  id: string;
+  /** The question's stable uid, not its editable key. */
+  uid: string;
   problem: string;
 }
 
@@ -141,26 +162,39 @@ export function validateQuestions(qs: QuestionItem[]): ValidationIssue[] {
   const out: ValidationIssue[] = [];
   const seen = new Set<string>();
   for (const q of qs) {
-    if (seen.has(q.id)) out.push({ id: q.id, problem: "ключ вопроса повторяется" });
+    // An empty id would become the key "" in the request and in the exported answers.
+    if (!q.id.trim()) out.push({ uid: q.uid, problem: "пустой ключ вопроса" });
+    else if (seen.has(q.id)) out.push({ uid: q.uid, problem: "ключ вопроса повторяется" });
     seen.add(q.id);
-    if (!q.text.trim()) out.push({ id: q.id, problem: "пустой текст вопроса" });
+    if (!q.text.trim()) out.push({ uid: q.uid, problem: "пустой текст вопроса" });
     if (q.type === "choice" || q.type === "score") {
       const items = q.type === "score" ? q.levels : q.options;
       const noun = q.type === "score" ? "уровня" : "варианта";
-      const labels = items.map((o) => o.label.trim()).filter(Boolean);
-      if (labels.length < 2) out.push({ id: q.id, problem: `нужно минимум 2 непустых ${noun}` });
+      const labels = scoredItems(q).map((o) => o.label);
+      if (labels.length < 2) out.push({ uid: q.uid, problem: `нужно минимум 2 непустых ${noun}` });
       else if (new Set(labels).size !== labels.length)
-        out.push({ id: q.id, problem: q.type === "score" ? "уровни повторяются" : "варианты повторяются" });
+        out.push({ uid: q.uid, problem: q.type === "score" ? "уровни повторяются" : "варианты повторяются" });
+      // Blank rows are dropped from the request rather than sent as empty options, so
+      // this is not a crash -- but a row the user typed a description into and never
+      // labelled would vanish without a word, which is the wrong kind of quiet.
+      if (labels.length !== items.length) {
+        const blanks = items.length - labels.length;
+        const plural = q.type === "score" ? "уровней без метки" : "вариантов без метки";
+        out.push({
+          uid: q.uid,
+          problem: `${blanks} ${plural} — они не уйдут модели; заполните или удалите`,
+        });
+      }
       // criteria is a dict keyed by label, and the documented ceiling is 255
-      if (labels.length > 255) out.push({ id: q.id, problem: "больше 255 вариантов" });
+      if (labels.length > 255) out.push({ uid: q.uid, problem: "больше 255 вариантов" });
     }
   }
   return out;
 }
 
 export interface Advice {
-  /** Question this is about, or null for the whole run. */
-  id: string | null;
+  /** Question this is about, by stable uid, or null for the whole run. */
+  uid: string | null;
   text: string;
   /** `hard` advice means the numbers below are not worth reading. */
   level: "hard" | "soft";
@@ -177,10 +211,25 @@ export function advice(task: string, text: string, qs: QuestionItem[]): Advice[]
   // English-only, and it does not fail gracefully: the model card reports 0.000
   // accuracy at 0.952 mean confidence on Khmer. Being wrong while confident is
   // exactly the failure a confidence threshold cannot catch, so this is `hard`.
-  const foreign = [text, task, ...qs.map((q) => q.text + q.hint)].some((s) => NON_LATIN.test(s));
+  // Every string that ends up inside the sequence, not just the obvious two. Option
+  // labels, their descriptions and the yes/no criteria all pass through renderOptions
+  // and are scored, so a Russian option list under an English question was reaching
+  // the model with no banner at all.
+  const inRequest = [
+    text,
+    task,
+    ...qs.flatMap((q) => [
+      q.text,
+      q.hint,
+      q.criteriaTrue,
+      q.criteriaFalse,
+      ...scoredItems(q).flatMap((o) => [o.label, o.description]),
+    ]),
+  ];
+  const foreign = inRequest.some((s) => NON_LATIN.test(s));
   if (foreign) {
     out.push({
-      id: null,
+      uid: null,
       level: "hard",
       text:
         "Найдены нелатинские символы. Этот чекпойнт обучен только на английском и на других " +
@@ -193,7 +242,7 @@ export function advice(task: string, text: string, qs: QuestionItem[]): Advice[]
   for (const q of qs) {
     if (q.type === "choice" && countOptions(q) > 10) {
       out.push({
-        id: q.id,
+        uid: q.uid,
         level: "soft",
         text:
           `${countOptions(q)} вариантов: температура бакета choice:11+ равна 0.1006, распределение ` +
@@ -202,21 +251,21 @@ export function advice(task: string, text: string, qs: QuestionItem[]): Advice[]
     }
     if (q.type === "score") {
       out.push({
-        id: q.id,
+        uid: q.uid,
         level: "soft",
         text: "score — самый слабый примитив этого чекпойнта (SST-5 0.372). Где хватает «да/нет», бинарный вопрос разделяет лучше.",
       });
     }
     if (q.type === "noul" && (!q.criteriaTrue.trim() || !q.criteriaFalse.trim())) {
       out.push({
-        id: q.id,
+        uid: q.uid,
         level: "soft",
         text: "не заданы описания «да» и «нет» — они стоят несколько токенов и заметно повышают разделимость.",
       });
     }
     if (q.text.trim().length > 80 && /\b(and|or)\b/i.test(q.text)) {
       out.push({
-        id: q.id,
+        uid: q.uid,
         level: "soft",
         text: "похоже на составной вопрос. Один предикат на вопрос: составная формулировка сглаживает шкалу — спросите отдельно и соедините результаты в коде.",
       });
@@ -228,6 +277,7 @@ export function advice(task: string, text: string, qs: QuestionItem[]): Advice[]
 /** Example content so the PoC is runnable immediately. English, because the model is. */
 export function seedQuestions(): { questions: QuestionItem[]; counter: number } {
   const q = (p: Partial<QuestionItem> & Pick<QuestionItem, "id" | "type" | "text">): QuestionItem => ({
+    uid: newUid(),
     hint: "",
     criteriaTrue: "",
     criteriaFalse: "",

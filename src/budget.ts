@@ -13,13 +13,18 @@ import type { SequenceStats } from "./laya/types";
 import { buildState, toQuestionDef, type FramingMode, type QuestionItem } from "./questions";
 
 export interface QuestionBudget {
-  id: string;
+  /** Stable uid, so the panel keeps pointing at the same card while its key is edited. */
+  uid: string;
   stats: SequenceStats;
   /** The instruction text did not fit the head budget and was cut from the end.
    *  Since the task prompt goes in front, what gets cut is the question itself. */
   instructionsClipped: boolean;
   /** The text did not fit and its tail was dropped. */
   stateTruncated: boolean;
+  /** Every option text was shortened to fit the head budget. Unlike the two above,
+   *  this one cuts each label individually and mid-word, and the model then scores the
+   *  mangled text -- with a perfectly ordinary-looking distribution coming back. */
+  optionsShrunk: boolean;
   /** Options did not fit in head_max_len at all -- this question cannot run. */
   optionsDontFit: boolean;
 }
@@ -32,8 +37,12 @@ export interface Budget {
   headMaxLen: number;
   /** Fewest state tokens any single question leaves room for. */
   worstStateUsed: number;
+  /** Longest sequence any question produces. What is left of max_len is this, not the
+   *  state count: the question head and its options take their share first. */
+  worstTotalTokens: number;
   anyTruncated: boolean;
   anyClipped: boolean;
+  anyShrunk: boolean;
   anyBroken: boolean;
 }
 
@@ -53,9 +62,10 @@ export function analyse(
     const k = renderOptions(internal).length;
     const { markers, stats } = buildSequence(core.tok, state, internal, core.cfg.max_len, core.cfg.head_max_len);
     perQuestion.push({
-      id: q.id,
+      uid: q.uid,
       stats,
       instructionsClipped: stats.headTokens < stats.headTokensFull,
+      optionsShrunk: stats.optionsShrunk,
       stateTruncated: stats.stateTokensUsed < stats.stateTokens || stats.overflowTokens > 0,
       optionsDontFit: markers.length !== k,
     });
@@ -70,8 +80,10 @@ export function analyse(
     worstStateUsed: perQuestion.length
       ? Math.min(...perQuestion.map((p) => p.stats.stateTokensUsed))
       : stateTokens,
+    worstTotalTokens: perQuestion.length ? Math.max(...perQuestion.map((p) => p.stats.totalTokens)) : 0,
     anyTruncated: perQuestion.some((p) => p.stateTruncated),
     anyClipped: perQuestion.some((p) => p.instructionsClipped),
+    anyShrunk: perQuestion.some((p) => p.optionsShrunk),
     anyBroken: perQuestion.some((p) => p.optionsDontFit),
   };
 }

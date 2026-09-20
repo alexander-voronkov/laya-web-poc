@@ -8,6 +8,7 @@
 import {
   SEED_TASK,
   SEED_TEXT,
+  newUid,
   seedQuestions,
   type FramingMode,
   type OptionItem,
@@ -15,6 +16,9 @@ import {
 } from "./questions";
 
 const KEY = "laya-web-poc/session";
+// Holds a draft that could not be parsed, so a bad read is recoverable rather than
+// silently overwritten by the next autosave.
+const BACKUP_KEY = "laya-web-poc/session.bak";
 const VERSION = 1;
 
 export interface Session {
@@ -82,6 +86,7 @@ function toQuestion(v: unknown, index: number): QuestionItem {
   const r = (v ?? {}) as Record<string, unknown>;
   const type = r.type === "choice" || r.type === "score" ? r.type : "noul";
   return {
+    uid: str(r.uid) || newUid(),
     id: str(r.id) || `q${index + 1}`,
     type,
     text: str(r.text),
@@ -93,12 +98,44 @@ function toQuestion(v: unknown, index: number): QuestionItem {
   };
 }
 
+/** A draft we could not read is not the same as no draft.
+ *
+ *  Autosave fires 400ms after the seed becomes state, so returning the example on a
+ *  failed read does not merely fail to restore the draft -- it overwrites it, and the
+ *  user sees an ordinary first run with no sign that a moment ago their text was
+ *  there. Keeping the raw string under a second key makes that recoverable. */
+function setAside(raw: string): void {
+  try {
+    localStorage.setItem(BACKUP_KEY, raw);
+  } catch {
+    /* nothing better to do: the draft is lost either way */
+  }
+}
+
+/** True when a previous draft could not be read and was set aside. */
+export function hasSetAsideDraft(): boolean {
+  try {
+    return localStorage.getItem(BACKUP_KEY) !== null;
+  } catch {
+    return false;
+  }
+}
+
 export function loadSession(): Session {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return defaultSession();
-    const parsed: unknown = JSON.parse(raw);
-    if (!isRawSession(parsed)) return defaultSession();
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      setAside(raw);
+      return defaultSession();
+    }
+    if (!isRawSession(parsed)) {
+      setAside(raw);
+      return defaultSession();
+    }
     return {
       version: VERSION,
       text: parsed.text as string,
@@ -112,17 +149,23 @@ export function loadSession(): Session {
   }
 }
 
-export function saveSession(s: Session): void {
+/** Returns false when the draft was not stored. The page promises in its own tagline
+ *  that it keeps the draft, so a write that quietly fails -- private mode, or a pasted
+ *  text past the origin quota -- has to be visible. Losing an hour of work and finding
+ *  the seed example on reload is not something to discover by reloading. */
+export function saveSession(s: Session): boolean {
   try {
     localStorage.setItem(KEY, JSON.stringify(s));
+    return true;
   } catch {
-    // quota, or storage blocked entirely -- the page keeps working, it just forgets
+    return false;
   }
 }
 
 export function clearSession(): void {
   try {
     localStorage.removeItem(KEY);
+    localStorage.removeItem(BACKUP_KEY);
   } catch {
     /* storage blocked */
   }

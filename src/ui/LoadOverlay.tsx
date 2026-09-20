@@ -29,10 +29,13 @@ export function LoadOverlay({ phase, error, files, onRetry }: Props) {
                   {f.total ? `${mb(f.loaded)} / ${mb(f.total)} МБ` : `${mb(f.loaded)} МБ`}
                 </span>
               </div>
-              <div className="bar slim">
+              {/* Without Content-Length (chunked or compressed responses) there is no
+                  denominator. A full bar would then be indistinguishable from a
+                  finished file and reads as a hang; an indeterminate one is honest. */}
+              <div className={`bar slim${f.total ? "" : " indeterminate"}`}>
                 <div
                   className={`bar-fill${f.cached ? " cached" : ""}`}
-                  style={{ width: `${f.total ? Math.min(100, (f.loaded / f.total) * 100).toFixed(1) : 100}%` }}
+                  style={f.total ? { width: `${Math.min(100, (f.loaded / f.total) * 100).toFixed(1)}%` } : undefined}
                 />
               </div>
             </div>

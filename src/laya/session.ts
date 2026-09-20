@@ -80,20 +80,24 @@ async function fetchCached(url: string, onProgress?: (p: LoadProgress) => void):
   return buf;
 }
 
-/** Bytes the weight cache actually holds -- reported rather than assumed, since a
- *  quota failure on put() leaves a loaded session with nothing cached. */
-export async function cachedWeightBytes(): Promise<number> {
+/** What the weight cache actually holds -- reported rather than assumed, since a
+ *  quota failure on put() leaves a loaded session with a partial cache. */
+export async function cachedWeights(): Promise<CacheState> {
+  const empty: CacheState = { bytes: 0, files: 0, expected: WEIGHT_FILES.length, unavailable: false };
   try {
     const cache = await caches.open(CACHE);
-    let n = 0;
+    let bytes = 0;
+    let files = 0;
     for (const k of await cache.keys()) {
       const r = await cache.match(k);
       if (!r) continue;
-      n += Number(r.headers.get("content-length") ?? 0) || (await r.blob()).size;
+      const name = new URL(k.url).pathname.split("/").pop() ?? "";
+      if (WEIGHT_FILES.includes(name)) files++;
+      bytes += Number(r.headers.get("content-length") ?? 0) || (await r.blob()).size;
     }
-    return n;
+    return { ...empty, bytes, files };
   } catch {
-    return 0;
+    return { ...empty, unavailable: true };
   }
 }
 
@@ -106,6 +110,15 @@ export interface RunOptions {
   signal?: AbortSignal;
   /** Fires as each answer lands, so a long batch fills the page progressively. */
   onAnswer?: (qid: string, answer: Answer, telemetry: QuestionTelemetry) => void;
+  /** Question ids in the order they should run.
+   *
+   *  Without it the order comes from `Object.entries`, and JavaScript hoists
+   *  integer-like keys to the front in ascending numeric order. Someone who names
+   *  their questions "1", "2", "3" and then reorders them in the UI gets a run that
+   *  ignores the reordering: answers appear in a different order from the editor and
+   *  the progress counter jumps around. Answers stay correctly attributed either way,
+   *  but the sequence the user asked for is not the one that happens. */
+  order?: string[];
 }
 
 export interface RunResult {
@@ -113,6 +126,29 @@ export interface RunResult {
   telemetry: { questions: QuestionTelemetry[]; totalMs: number };
   /** True when the run stopped early because the signal aborted. */
   aborted: boolean;
+}
+
+/** Whether threaded wasm is possible at all here. Both conditions, not just the
+ *  isolation flag: a browser can report `crossOriginIsolated` while SharedArrayBuffer
+ *  is withheld by policy, and ORT needs the constructor, not the flag. */
+export function threadsAvailable(): boolean {
+  const isolated = typeof crossOriginIsolated === "boolean" ? crossOriginIsolated : false;
+  return isolated && typeof SharedArrayBuffer !== "undefined";
+}
+
+/** The weight files a complete cache is expected to hold. */
+export const WEIGHT_FILES = ["encoder_q8.onnx", "encoder_q8.onnx.data", "head_q8.onnx", "head_q8.onnx.data"];
+
+export interface CacheState {
+  bytes: number;
+  /** How many of WEIGHT_FILES are present. A put() that failed on quota leaves a
+   *  working session behind a partly-filled cache, and summing the bytes that did
+   *  land reads as a complete cache -- so the next visit re-downloads a few hundred
+   *  megabytes after the page promised it would not. */
+  files: number;
+  expected: number;
+  /** Cache API unavailable (private mode, blocked storage): distinct from an empty cache. */
+  unavailable: boolean;
 }
 
 /** usedJSHeapSize where the browser exposes it (Chromium), null elsewhere. Reported
@@ -139,18 +175,29 @@ export async function loadCore(base: string): Promise<Core> {
 
 export class LayaSession {
   readonly cfg: LayaConfig;
+  /** Threads asked for. */
+  readonly requestedThreads: number;
+  /** Threads the run can actually use.
+   *
+   *  ORT does not publish the number it settled on -- `env.wasm.numThreads` reads back
+   *  whatever we wrote into it -- so this is derived from the one thing that decides it:
+   *  threaded wasm needs SharedArrayBuffer, which exists only under cross-origin
+   *  isolation. Without it ORT runs single-threaded regardless of the request, and
+   *  reporting the request as the outcome puts "8 threads" on a benchmark that ran on
+   *  one. Derived, not measured -- and the metrics panel says which. */
   readonly numThreads: number;
   readonly hardwareConcurrency: number;
   private tok: Tok;
   private enc: ort.InferenceSession;
   private head: ort.InferenceSession;
 
-  private constructor(cfg: LayaConfig, tok: Tok, enc: ort.InferenceSession, head: ort.InferenceSession, numThreads: number) {
+  private constructor(cfg: LayaConfig, tok: Tok, enc: ort.InferenceSession, head: ort.InferenceSession, requestedThreads: number) {
     this.cfg = cfg;
     this.tok = tok;
     this.enc = enc;
     this.head = head;
-    this.numThreads = numThreads;
+    this.requestedThreads = requestedThreads;
+    this.numThreads = threadsAvailable() ? requestedThreads : 1;
     this.hardwareConcurrency = navigator.hardwareConcurrency || 1;
   }
 
@@ -186,8 +233,21 @@ export class LayaSession {
       opts.onStage?.(name === "encoder_q8" ? "encoder-init" : "head-init", performance.now() - t);
       return s;
     };
-    const enc = await mk("encoder_q8");
-    const head = await mk("head_q8");
+    // Releasing on the way out matters more than it looks. The encoder session is
+    // built first and holds ~470MB of wasm linear memory; if the head's weights then
+    // fail mid-download, dropping the JS reference does not free it -- only
+    // release() does. A retry would stack a second encoder on top of the first, which
+    // is precisely the out-of-memory this module's boot singleton exists to prevent.
+    let partial: ort.InferenceSession | undefined;
+    let enc: ort.InferenceSession;
+    let head: ort.InferenceSession;
+    try {
+      enc = partial = await mk("encoder_q8");
+      head = await mk("head_q8");
+    } catch (e) {
+      await Promise.allSettled([partial?.release()]);
+      throw e;
+    }
     opts.onStage?.("weights", weightsMs);
     return new LayaSession(core.cfg, core.tok, enc, head, threads);
   }
@@ -210,8 +270,10 @@ export class LayaSession {
     const t0 = performance.now();
     let aborted = false;
 
-    for (const [qid, qdef] of Object.entries(questions)) {
+    const order = opts.order?.filter((id) => id in questions) ?? Object.keys(questions);
+    for (const qid of order) {
       if (opts.signal?.aborted) { aborted = true; break; }
+      const qdef = questions[qid];
       const qt0 = performance.now();
       const q = toInternal(qdef);
       const k = renderOptions(q).length;

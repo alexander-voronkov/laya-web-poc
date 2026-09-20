@@ -1,42 +1,48 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { NOMINAL_TOTAL_BYTES } from "../config";
-import { jsHeapBytes, type LoadProgress, type LoadStage } from "../laya/session";
+import { jsHeapBytes, type CacheState, type LayaSession, type LoadProgress, type LoadStage } from "../laya/session";
 import type { QuestionTelemetry } from "../laya/types";
 import { mb, ms, sec } from "../format";
+
+interface RunSummary {
+  questions: QuestionTelemetry[];
+  totalMs: number;
+  aborted: boolean;
+  requested: number;
+}
 
 interface Props {
   files: LoadProgress[];
   stages: Partial<Record<LoadStage, number>>;
-  cacheBytes: number | null;
-  threads: number | null;
+  cache: CacheState | null;
+  session: LayaSession | null;
   ready: boolean;
-  run: { questions: QuestionTelemetry[]; totalMs: number } | null;
-  /** Non-null while a run is in flight, so the panel is live rather than final-only. */
-  runningMs: number | null;
+  run: RunSummary | null;
 }
 
-interface Storage {
+interface StorageState {
   usage: number | null;
   quota: number | null;
+  available: boolean;
 }
 
-/** Quota tells the user whether a 524MB cache will survive; usage tells them whether
- *  it is actually there. Both are estimates by specification -- labelled as such. */
-function useStorageEstimate(ready: boolean): Storage {
-  const [s, setS] = useState<Storage>({ usage: null, quota: null });
+/** Quota tells the user whether a 524MB cache can survive; usage tells them what is
+ *  already spent. Both are estimates by specification -- labelled as such. */
+function useStorageEstimate(ready: boolean): StorageState {
+  const [s, setS] = useState<StorageState>({ usage: null, quota: null, available: false });
   useEffect(() => {
     if (!ready) return;
     let alive = true;
     navigator.storage?.estimate?.().then(
-      (e) => { if (alive) setS({ usage: e.usage ?? null, quota: e.quota ?? null }); },
-      () => { /* not supported, or blocked */ },
+      (e) => { if (alive) setS({ usage: e.usage ?? null, quota: e.quota ?? null, available: true }); },
+      () => { /* blocked by policy, or not implemented */ },
     );
     return () => { alive = false; };
   }, [ready]);
   return s;
 }
 
-export function MetricsPanel({ files, stages, cacheBytes, threads, ready, run, runningMs }: Props) {
+export function MetricsPanel({ files, stages, cache, session, ready, run }: Props) {
   const storage = useStorageEstimate(ready);
   const heap = jsHeapBytes();
 
@@ -52,11 +58,13 @@ export function MetricsPanel({ files, stages, cacheBytes, threads, ready, run, r
   const scored = qs.reduce((a, q) => a + q.options, 0);
   const encoderMs = qs.reduce((a, q) => a + q.encoderMs, 0);
   const droppedTokens = qs.reduce((a, q) => a + (q.stats.stateTokens - q.stats.stateTokensUsed), 0);
-  const totalMs = run?.totalMs ?? runningMs ?? 0;
+  const totalMs = run?.totalMs ?? 0;
 
   const cores = navigator.hardwareConcurrency;
   const deviceMemory = (navigator as unknown as { deviceMemory?: number }).deviceMemory;
   const isolated = typeof crossOriginIsolated !== "undefined" && crossOriginIsolated;
+  const threadsRequested = session?.requestedThreads ?? null;
+  const threadsEffective = session?.numThreads ?? null;
 
   const rows: [string, ReactNode][] = [
     [
@@ -71,16 +79,22 @@ export function MetricsPanel({ files, stages, cacheBytes, threads, ready, run, r
     ],
     [
       "Wasm-потоки",
-      `${threads ?? "?"} из ${cores ?? "?"} ядер · crossOriginIsolated: ${isolated ? "✓" : "✗"}`,
+      threadsEffective === null
+        ? "—"
+        : threadsEffective === threadsRequested
+          ? `${threadsEffective} из ${cores ?? "?"} ядер · crossOriginIsolated: ✓`
+          : `${threadsEffective} (запрошено ${threadsRequested}, ядер ${cores ?? "?"}) · crossOriginIsolated: ✗`,
     ],
-    ...(isolated ? [] : [[
-      "⚠ Изоляция",
-      "нет cross-origin isolation — SharedArrayBuffer недоступен, wasm работает в один поток и считает примерно в 6 раз дольше. Проверьте заголовки COOP/COEP.",
-    ] as [string, ReactNode]]),
+    ...(ready && !isolated
+      ? ([[
+          "⚠ Изоляция",
+          "нет cross-origin isolation — SharedArrayBuffer недоступен, wasm считает в один поток, примерно в 6 раз дольше. Число потоков выше выведено из этого факта, а не измерено: ORT не сообщает, на скольких потоках он фактически пошёл. Проверьте заголовки COOP/COEP.",
+        ]] as [string, ReactNode][])
+      : []),
     [
       "Время прогона",
       qs.length
-        ? `${sec(totalMs)} на ${qs.length} вопр. · ${ms(totalMs / qs.length)} в среднем · энкодер ${((encoderMs / totalMs) * 100).toFixed(0)}% времени`
+        ? `${sec(totalMs)} на ${qs.length} вопр.${run && run.aborted ? ` из ${run.requested} (остановлено)` : ""} · ${ms(totalMs / qs.length)} в среднем · энкодер ${((encoderMs / totalMs) * 100).toFixed(0)}% времени`
         : "—",
     ],
     [
@@ -95,27 +109,26 @@ export function MetricsPanel({ files, stages, cacheBytes, threads, ready, run, r
     ],
     [
       "Память (JS heap)",
+      // usedJSHeapSize measures the V8 heap. WebAssembly linear memory -- where the
+      // ~600MB of dequantised weights actually live -- is a separate backing store and
+      // is NOT counted here. Saying otherwise invites reading "142 MB" as the model
+      // fitting in 142 MB.
       heap !== null
-        ? `${mb(heap)} МБ · веса живут в wasm-куче внутри этого числа`
+        ? `${mb(heap)} МБ — это куча JavaScript; линейная память wasm, где лежат веса, сюда не входит и браузером не раскрывается`
         : "performance.memory недоступен в этом браузере (есть только в Chromium)",
     ],
     [
       "Память устройства",
       deviceMemory ? `${deviceMemory} ГБ (округление браузера)` : "navigator.deviceMemory недоступен",
     ],
-    [
-      "Кэш весов",
-      cacheBytes
-        ? `${mb(cacheBytes)} МБ в Cache Storage — следующее открытие без скачивания`
-        : ready
-          ? "веса не закэшировались (квота или приватный режим) — при перезагрузке скачаются заново"
-          : "—",
-    ],
+    ["Кэш весов", <CacheLine cache={cache} ready={ready} key="cache" />],
     [
       "Квота хранилища",
-      storage.quota !== null
-        ? `${mb(storage.usage ?? 0)} из ~${(storage.quota / 1e9).toFixed(1)} ГБ занято (оценка браузера)`
-        : "navigator.storage.estimate() недоступен",
+      !storage.available
+        ? "navigator.storage.estimate() недоступен"
+        : storage.quota === null
+          ? "браузер не сообщает квоту"
+          : `${storage.usage === null ? "занято неизвестно" : `${mb(storage.usage)} МБ занято`} из ~${(storage.quota / 1e9).toFixed(1)} ГБ (оценка браузера)`,
     ],
   ];
 
@@ -129,6 +142,24 @@ export function MetricsPanel({ files, stages, cacheBytes, threads, ready, run, r
       {qs.length > 0 && <PerQuestionTable qs={qs} />}
     </>
   );
+}
+
+/** Partial is its own state. Summing whatever landed in the cache and calling it
+ *  cached is how the page promises an instant second load and then downloads a few
+ *  hundred megabytes: a put() that failed on quota leaves a working session behind an
+ *  incomplete cache, and the bytes that did land look like success. */
+function CacheLine({ cache, ready }: { cache: CacheState | null; ready: boolean }) {
+  if (!cache) return <>{ready ? "проверяется…" : "—"}</>;
+  if (cache.unavailable) return <span className="warn">Cache Storage недоступен (приватный режим или запрет на данные сайта) — веса будут скачиваться каждый раз</span>;
+  if (cache.files === 0) return <span className="warn">веса не закэшировались (квота или запрет) — при перезагрузке скачаются заново</span>;
+  if (cache.files < cache.expected)
+    return (
+      <span className="warn">
+        закэшировано {cache.files} из {cache.expected} файлов ({mb(cache.bytes)} МБ) — скорее всего не хватило квоты;
+        недостающие скачаются заново
+      </span>
+    );
+  return <>{mb(cache.bytes)} МБ, все {cache.expected} файла — следующее открытие без скачивания</>;
 }
 
 function PerQuestionTable({ qs }: { qs: QuestionTelemetry[] }) {

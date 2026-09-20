@@ -724,3 +724,49 @@ footer a {
     width: 72px;
   }
 }
+
+.bar.indeterminate {
+  position: relative;
+  overflow: hidden;
+}
+
+/* No Content-Length means no denominator: a sliding sliver says "working, length
+   unknown" where a full bar would say "done". */
+.bar.indeterminate .bar-fill {
+  position: absolute;
+  width: 35%;
+  animation: bar-slide 1.4s ease-in-out infinite;
+}
+
+@keyframes bar-slide {
+  0% { left: -35%; }
+  100% { left: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bar.indeterminate .bar-fill {
+    animation: none;
+    left: 0;
+    width: 100%;
+    opacity: 0.35;
+  }
+}
+
+.ans-partial {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--warn);
+}
+
+.dist-pct.muted {
+  font-variant-numeric: normal;
+  font-size: 11px;
+}
+
+.q-budget .error {
+  color: var(--error);
+}
+
+.q-budget .warn {
+  color: var(--warn);
+}

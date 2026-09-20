@@ -2,8 +2,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { MODELS_BASE } from "./config";
 import {
   LayaSession,
-  cachedWeightBytes,
+  cachedWeights,
   loadCore,
+  type CacheState,
   type Core,
   type LoadProgress,
   type LoadStage,
@@ -18,7 +19,7 @@ export interface LayaLoad {
   session: LayaSession | null;
   files: LoadProgress[];
   stages: Partial<Record<LoadStage, number>>;
-  cacheBytes: number | null;
+  cache: CacheState | null;
 }
 
 interface Boot {
@@ -69,7 +70,7 @@ export function useLaya(): LayaLoad & { retry: () => void } {
   const [session, setSession] = useState<LayaSession | null>(null);
   const [files, setFiles] = useState<LoadProgress[]>([...seenProgress.values()]);
   const [stages, setStages] = useState<Partial<Record<LoadStage, number>>>({ ...seenStages });
-  const [cacheBytes, setCacheBytes] = useState<number | null>(null);
+  const [cache, setCache] = useState<CacheState | null>(null);
   const [attempt, setAttempt] = useState(0);
   const alive = useRef(true);
 
@@ -100,7 +101,7 @@ export function useLaya(): LayaLoad & { retry: () => void } {
         setCore(c);
         setSession(s);
         setPhase("ready");
-        cachedWeightBytes().then((n) => { if (alive.current) setCacheBytes(n); });
+        cachedWeights().then((state) => { if (alive.current) setCache(state); });
       },
       (e: unknown) => {
         if (!alive.current) return;
@@ -122,5 +123,5 @@ export function useLaya(): LayaLoad & { retry: () => void } {
     setAttempt((n) => n + 1);
   }, []);
 
-  return { phase, error, core, session, files, stages, cacheBytes, retry };
+  return { phase, error, core, session, files, stages, cache, retry };
 }
