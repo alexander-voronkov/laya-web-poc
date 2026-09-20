@@ -62,8 +62,17 @@ try {
 
   log("running inference…");
   const t0 = Date.now();
-  await page.getByRole("button", { name: "Get answers" }).click();
-  // Three seeded questions, one forward pass each, on the main thread.
+  // Dispatched, not clicked. Inference runs on the main thread (ORT's threaded wasm
+  // only initialises there), so the page stops answering for the length of a forward
+  // pass -- and Playwright's click waits for the page to settle afterwards, which it
+  // cannot do until the whole batch is finished. The click lands either way; only the
+  // waiting is the problem, so skip it and wait on the answers instead.
+  await page.evaluate(() => {
+    const btn = document.querySelector(".run-card button.btn.primary");
+    if (!(btn instanceof HTMLButtonElement)) throw new Error("run button not found");
+    btn.click();
+  });
+  // Three seeded questions, one forward pass each.
   await page.waitForSelector(".ans-card", { timeout: 300_000 });
   await page.waitForFunction(
     () => /done in|stopped:|failed on/.test(document.querySelector(".run-card span")?.textContent ?? ""),
