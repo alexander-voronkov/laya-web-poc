@@ -207,7 +207,19 @@ export class LayaSession {
     // asyncify and jsep variants but not the plain threaded one, and session creation
     // then hangs with no error rather than failing. In dev, ORT resolves the runtime
     // from node_modules, which Vite serves happily.
-    if (import.meta.env.PROD) ort.env.wasm.wasmPaths = "/ort/";
+    // Explicit file paths, not a prefix. A prefix makes ORT ask for
+    // `ort-wasm-simd-threaded.mjs`, and nginx's stock mime.types has no entry for
+    // .mjs: it comes back as application/octet-stream, the browser's strict MIME
+    // check on dynamic import() rejects it, and ORT reports "no available backend
+    // found" -- naming neither the file nor the reason. scripts/copy-ort.mjs writes
+    // the loader as .js for exactly this, so the app does not depend on the host
+    // knowing an extension it need not know.
+    if (import.meta.env.PROD) {
+      ort.env.wasm.wasmPaths = {
+        wasm: "/ort/ort-wasm-simd-threaded.wasm",
+        mjs: "/ort/ort-wasm-simd-threaded.js",
+      };
+    }
     const threads = opts.threads ?? Math.min(navigator.hardwareConcurrency || 4, 8);
     ort.env.wasm.numThreads = threads;
     // Main thread, no proxy: threaded wasm initialises only there in a production bundle

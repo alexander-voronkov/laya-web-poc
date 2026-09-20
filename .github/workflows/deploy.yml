@@ -85,7 +85,7 @@ jobs:
           printf '%s\n' "$GITHUB_SHA" > dist/version.txt
           test -f dist/index.html
           test -f dist/ort/ort-wasm-simd-threaded.wasm
-          test -f dist/ort/ort-wasm-simd-threaded.mjs
+          test -f dist/ort/ort-wasm-simd-threaded.js
 
       # Host key is pinned from a secret rather than accepted on first use: rsync runs
       # with --delete against the live docroot, so a redirected connection would be a
@@ -142,13 +142,25 @@ jobs:
             || { echo "::error::COOP is not exactly same-origin"; exit 1; }
           echo "$headers" | tr -d '\r' | grep -iqE '^cross-origin-embedder-policy:[[:space:]]*require-corp[[:space:]]*$' \
             || { echo "::error::COEP is not exactly require-corp"; exit 1; }
-          # The wasm runtime lives under /ort/. Two things are checked here, and the
-          # second is not redundant: nginx answers with `try_files $uri $uri/
-          # /index.html`, so a *missing* runtime returns 200 with the HTML page. Status
-          # alone -- which is all `curl -f` looks at -- cannot tell the two apart, and a
-          # site whose wasm never loads would verify clean. The content type can.
-          ort=$(curl -fsS -D - -o /dev/null "$SITE/ort/ort-wasm-simd-threaded.wasm")
-          echo "$ort" | tr -d '\r' | grep -iqE '^content-type:[[:space:]]*application/wasm' \
-            || { echo "::error::/ort/ runtime is not being served as application/wasm — nginx fell through to index.html, i.e. the file is missing"; exit 1; }
-          echo "$ort" | tr -d '\r' | grep -iqE '^cross-origin-embedder-policy:[[:space:]]*require-corp[[:space:]]*$' \
-            || { echo "::error::COEP missing on /ort/ — the wasm runtime would not load isolated"; exit 1; }
+          # The wasm runtime lives under /ort/, and it is two files, not one. Checking
+          # only the .wasm is how the loader shipped broken: nginx served it with the
+          # wrong content type, the browser's strict MIME check on dynamic import()
+          # rejected the module, and the model never loaded for anybody -- while this
+          # step stayed green.
+          #
+          # Content type, not status: nginx answers `try_files $uri $uri/ /index.html`,
+          # so a *missing* file returns 200 with the HTML page, which `curl -f` accepts.
+          for probe in \
+            "ort-wasm-simd-threaded.wasm|application/wasm" \
+            "ort-wasm-simd-threaded.js|(application|text)/javascript"; do
+            file=${probe%%|*}; want=${probe##*|}
+            h=$(curl -fsS -D - -o /dev/null "$SITE/ort/$file" | tr -d '\r')
+            echo "$h" | grep -iqE "^content-type:[[:space:]]*$want" || {
+              echo "::error::/ort/$file is not served as $want — got: $(echo "$h" | grep -i '^content-type:' || echo 'no content-type')"
+              exit 1
+            }
+            echo "$h" | grep -iqE '^cross-origin-embedder-policy:[[:space:]]*require-corp[[:space:]]*$' || {
+              echo "::error::COEP missing on /ort/$file — the runtime would not load isolated"
+              exit 1
+            }
+          done

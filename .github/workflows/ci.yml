@@ -37,10 +37,17 @@ jobs:
         run: |
           set -euo pipefail
           test -f dist/index.html
-          # session.ts sets env.wasm.wasmPaths = "/ort/" in production builds; without
-          # these two files ORT hangs at session creation with no error message.
+          # session.ts names these two files explicitly in env.wasm.wasmPaths; without
+          # them ORT fails at session creation with "no available backend found",
+          # which names neither the file nor the reason.
           test -f dist/ort/ort-wasm-simd-threaded.wasm
-          test -f dist/ort/ort-wasm-simd-threaded.mjs
+          test -f dist/ort/ort-wasm-simd-threaded.js
+          # The loader must NOT ship as .mjs: nginx serves that as
+          # application/octet-stream and the browser refuses to import it.
+          if [ -e dist/ort/ort-wasm-simd-threaded.mjs ]; then
+            echo "::error::the ORT loader shipped as .mjs; see scripts/copy-ort.mjs"
+            exit 1
+          fi
           echo "dist: $(du -sh dist | cut -f1)"
 
       - uses: actions/upload-artifact@v4

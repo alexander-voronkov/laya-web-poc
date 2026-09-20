@@ -111,6 +111,7 @@ server {
 Notes:
 
 - `require-corp` (not `credentialless`) works with the Hugging Face CDN even though the CDN sends no CORP header: the weights are loaded with `fetch()` in CORS mode, and CORP enforcement only applies to no-cors subresource loads. `credentialless` would look equivalent and silently lose isolation in Safari, which does not implement it.
+- The ORT loader is served as `.js`, not `.mjs`, and `wasmPaths` names both runtime files explicitly. nginx's stock `mime.types` has no entry for `.mjs`, so it goes out as `application/octet-stream`; browsers apply a strict MIME check to dynamic `import()` and reject the module. ORT then reports `no available backend found`, naming neither the file nor the reason, while the file itself returns a perfectly healthy 200. This shipped, and the model loaded for nobody. Adding `.mjs` to the server's MIME map fixes it too and is worth doing — but the app no longer depends on the host knowing an extension it need not know.
 - The headers live in the `server` block, not in a `location` — an `add_header` inside `location /assets/` would otherwise drop the inherited ones.
 - Without these headers the page still works, but wasm falls back to a single thread and inference is roughly 6× slower. The metrics panel says so when it happens rather than leaving you to wonder why it is slow.
 - The dev server sets both headers itself — see the `crossOriginIsolation` plugin in `vite.config.ts`.
