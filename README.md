@@ -32,7 +32,16 @@ Every question is encoded byte-exactly as the Python original does:
 [CLS] <type> question: <instructions> [SEP] [MASK] opt0 [MASK] opt1 … [SEP] <state> [SEP]
 ```
 
-truncated to `max_len=512` tokens (`head_max_len=192` for the question head; the state keeps its beginning and the tail is cut). That 512 is a configuration value, not a property of the graph — the exported encoder declares a dynamic `seq_len` axis and uses rotary embeddings rather than a learned position table, and ModernBERT-large is an 8192-context backbone — so the UI offers larger budgets, labelled as what they are: the length the model was trained and temperature-fitted at is 512, and past it the forward pass still returns numbers between 0 and 1 that nobody has measured. Compare a long text against its truncated self before believing the longer answer. The head reads the `[MASK]` positions of the options; the answer is a softmax over the option scores **divided by the fitted temperature** for the (type, option-count) bucket from `rl_agent_config.json`.
+truncated to `max_len=512` tokens (`head_max_len=192` for the question head; the state keeps its beginning and the tail is cut). That 512 is a configuration value, not a property of the graph — the exported encoder declares a dynamic `seq_len` axis and uses rotary embeddings rather than a learned position table, and ModernBERT-large is an 8192-context backbone — so the UI offers larger budgets up to 8192.
+
+The long range was measured rather than assumed, with a text built so the answer depends on its tail: ~650 tokens of unqualified praise for a product, then a closing paragraph retracting all of it. Asked whether the reviewer recommends the product:
+
+| budget | text reaching the model | p(recommends) |
+| --- | --- | --- |
+| 512 | 477 tokens — the retraction is cut off | **64.3%** |
+| 1024 | 653 tokens — the whole review | **3.1%** |
+
+So the extra context is genuinely read, and moves the answer in the right direction. What that does **not** establish is that the probabilities stay calibrated past the length the temperatures were fitted at; only that the model sees the text. Past 512, read a number as an ordering. `scripts/` has no harness for this — it was a one-off, and the text above is enough to repeat it. The head reads the `[MASK]` positions of the options; the answer is a softmax over the option scores **divided by the fitted temperature** for the (type, option-count) bucket from `rl_agent_config.json`.
 
 ### Where the task prompt goes, and why it is a setting
 

@@ -469,9 +469,12 @@ function ContextBudget({ value, trained, onChange }: {
         </select>
         {value > trained && (
           <span className="warn">
-            {value} &gt; {trained}: the model runs at this length, but it was never trained or
-            calibrated there. Check a long text against its truncated self before believing the
-            longer answer.
+            {value} &gt; {trained}: past the length this checkpoint was trained and
+            temperature-fitted at. The long range does work — on a 653-token review whose closing
+            paragraph retracts everything before it, p(recommends) went 64.3% at 512, where the
+            retraction is truncated away, to 3.1% at 1024, where it is not. What that measurement
+            does not show is whether the probabilities stay calibrated out here, only that the
+            model reads the text. Treat a long-context number as an ordering.
           </span>
         )}
       </div>
