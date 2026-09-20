@@ -1,0 +1,143 @@
+name: Deploy to laya.voronkov.club
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  SITE: https://laya.voronkov.club
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://laya.voronkov.club
+    steps:
+      - uses: actions/checkout@v4
+
+      # Fail loudly and by name. A deploy job that quietly skips itself when it is not
+      # configured is indistinguishable from a deploy that worked, and the site would
+      # sit on a stale build with a green tick next to it.
+      - name: Check deploy credentials
+        env:
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          TARGET: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          missing=""
+          [ -n "$KEY" ]         || missing="$missing DEPLOY_SSH_KEY"
+          [ -n "$HOST" ]        || missing="$missing DEPLOY_HOST"
+          [ -n "$USER" ]        || missing="$missing DEPLOY_USER"
+          [ -n "$KNOWN_HOSTS" ] || missing="$missing DEPLOY_KNOWN_HOSTS"
+          [ -n "$TARGET" ]      || missing="$missing DEPLOY_PATH"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secrets:$missing — see README, section «Deploy»."
+            exit 1
+          fi
+          # rsync runs with --delete against this path. It is not a secret worth hiding
+          # from the log, and a typo in it is exactly what this line is here to reveal.
+          echo "deploy target: $USER@$HOST:$TARGET"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # The full gate runs here too, not only in ci.yml. Both workflows trigger on the
+      # same push with no ordering between them, so relying on CI to stop a bad deploy
+      # means the site is already updated by the time CI goes red. The parity test in
+      # particular: a one-token drift produces confident answers to a different
+      # question, and nothing downstream notices.
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Token parity against the reference implementation
+        run: npm test
+
+      - run: npm run build
+
+      # The live checks below can all pass against a previous deploy. Something in the
+      # bundle has to identify this build, or "verified" only means "some site is up".
+      - name: Stamp the build
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$GITHUB_SHA" > dist/version.txt
+          test -f dist/index.html
+          test -f dist/ort/ort-wasm-simd-threaded.wasm
+          test -f dist/ort/ort-wasm-simd-threaded.mjs
+
+      # Host key is pinned from a secret rather than accepted on first use: rsync runs
+      # with --delete against the live docroot, so a redirected connection would be a
+      # wipe, not just a bad deploy.
+      - name: Configure SSH
+        env:
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Upload dist
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+          TARGET: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          set -euo pipefail
+          rsync -az --delete --checksum \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts" \
+            dist/ "$USER@$HOST:$TARGET/"
+
+      # Deploying and then asserting nothing is how a broken deploy stays green.
+      - name: Verify this build is the one being served
+        run: |
+          set -euo pipefail
+          # Cache-buster: nginx serves /assets/ with expires 30d, and a CDN or proxy in
+          # front would otherwise answer from the previous deploy.
+          # A missing version.txt does not 404 here either -- try_files serves the HTML
+          # page -- so this compares content, not status, and truncates in case the
+          # answer turns out to be a whole page.
+          served=$(curl -fsS "$SITE/version.txt?cb=$GITHUB_RUN_ID" | tr -d '\r\n' | head -c 80)
+          if [ "$served" != "$GITHUB_SHA" ]; then
+            echo "::error::Live site serves '$served', expected '$GITHUB_SHA' — the upload did not reach the docroot nginx reads."
+            exit 1
+          fi
+          echo "live build: $served"
+
+      # Not cosmetic: without cross-origin isolation the page loses SharedArrayBuffer,
+      # falls back to a single wasm thread and runs ~6x slower.
+      - name: Verify cross-origin isolation
+        run: |
+          set -euo pipefail
+          headers=$(curl -fsS -D - -o /dev/null "$SITE/")
+          echo "$headers"
+          # Anchored to end-of-value: `same-origin-allow-popups` does NOT isolate, and a
+          # prefix match would accept it and report a 6x-slower site as correct.
+          echo "$headers" | tr -d '\r' | grep -iqE '^cross-origin-opener-policy:[[:space:]]*same-origin[[:space:]]*$' \
+            || { echo "::error::COOP is not exactly same-origin"; exit 1; }
+          echo "$headers" | tr -d '\r' | grep -iqE '^cross-origin-embedder-policy:[[:space:]]*require-corp[[:space:]]*$' \
+            || { echo "::error::COEP is not exactly require-corp"; exit 1; }
+          # The wasm runtime lives under /ort/. Two things are checked here, and the
+          # second is not redundant: nginx answers with `try_files $uri $uri/
+          # /index.html`, so a *missing* runtime returns 200 with the HTML page. Status
+          # alone -- which is all `curl -f` looks at -- cannot tell the two apart, and a
+          # site whose wasm never loads would verify clean. The content type can.
+          ort=$(curl -fsS -D - -o /dev/null "$SITE/ort/ort-wasm-simd-threaded.wasm")
+          echo "$ort" | tr -d '\r' | grep -iqE '^content-type:[[:space:]]*application/wasm' \
+            || { echo "::error::/ort/ runtime is not being served as application/wasm — nginx fell through to index.html, i.e. the file is missing"; exit 1; }
+          echo "$ort" | tr -d '\r' | grep -iqE '^cross-origin-embedder-policy:[[:space:]]*require-corp[[:space:]]*$' \
+            || { echo "::error::COEP missing on /ort/ — the wasm runtime would not load isolated"; exit 1; }

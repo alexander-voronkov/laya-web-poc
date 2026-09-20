@@ -37,3 +37,48 @@ export interface LayaResponse {
 
 export const QTYPES: Record<QType, number> = { choice: 0, score: 1, noul: 2 };
 export const QTYPE_NAMES: QType[] = ["choice", "score", "noul"];
+
+// ---------------------------------------------------------------------------
+// laya-web-poc: telemetry. None of this feeds back into inference -- it exists so
+// the page can show where the 512-token budget, the time and the memory went.
+// ---------------------------------------------------------------------------
+
+/** How one question spent the sequence budget, and what did not fit. */
+export interface SequenceStats {
+  /** Instruction tokens that survived the head budget clamp. */
+  headTokens: number;
+  /** Instruction tokens before the clamp. Larger than headTokens means the wording
+   *  was cut from the end -- and since the task prompt is prepended, the cut lands
+   *  on the question itself. */
+  headTokensFull: number;
+  /** Option tokens actually sent, including one [MASK] marker each. */
+  optionTokens: number;
+  optionTokensFull: number;
+  /** True when the options did not fit and every one of them was shortened. */
+  optionsShrunk: boolean;
+  /** State tokens the text would need in full. */
+  stateTokens: number;
+  /** State tokens that actually reached the model. */
+  stateTokensUsed: number;
+  /** Length of the sequence handed to the encoder. */
+  totalTokens: number;
+  /** Tokens dropped past max_len even after the state was truncated. */
+  overflowTokens: number;
+}
+
+export interface QuestionTelemetry {
+  qid: string;
+  type: QType;
+  options: number;
+  /** Bucket the temperature was looked up under, e.g. "choice:3-5". */
+  temperatureBucket: string;
+  temperature: number;
+  stats: SequenceStats;
+  /** Tokenizing and assembling the sequence. */
+  buildMs: number;
+  /** The 28-layer ModernBERT encoder pass -- this is where the time goes. */
+  encoderMs: number;
+  /** The decision head. */
+  headMs: number;
+  totalMs: number;
+}
