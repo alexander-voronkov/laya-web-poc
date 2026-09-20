@@ -33,8 +33,10 @@ export interface Budget {
   perQuestion: QuestionBudget[];
   /** Tokens the text needs in full, independent of any question. */
   stateTokens: number;
-  /** Budget in force. */
+  /** Budget in force, after `auto` has resolved. */
   maxLen: number;
+  /** True when the budget was chosen to fit the text rather than set explicitly. */
+  auto: boolean;
   /** Budget the checkpoint was trained and temperature-fitted at. Beyond it the model
    *  still runs -- the graph has a dynamic sequence axis and rotary embeddings -- but
    *  nothing about the answers has been measured there. */
@@ -57,17 +59,39 @@ export function analyse(
   text: string,
   questions: QuestionItem[],
   mode: FramingMode,
-  /** Sequence budget in force, which the UI may have raised above cfg.max_len. */
-  maxLen: number = core.cfg.max_len,
+  /** Sequence budget in force, or null to fit the text automatically. */
+  maxLen: number | null = core.cfg.max_len,
+  /** Budgets `auto` may choose from, smallest first. */
+  choices: number[] = [core.cfg.max_len],
 ): Budget {
   const state = buildState(task, text, mode);
   const stateTokens = core.tok.encode(state, { add_special_tokens: false }).length;
   const perQuestion: QuestionBudget[] = [];
 
+  // `auto` needs the per-question overhead before it can choose, and the overhead does
+  // not depend on the budget: the question head has its own `head_max_len` allowance.
+  // So measure once at the largest candidate, then pick the smallest that holds the
+  // whole text, then build for real. Two tokenizer passes, no guessing.
+  const effective =
+    maxLen ??
+    (() => {
+      const probe = choices[choices.length - 1] ?? core.cfg.max_len;
+      let overhead = 0;
+      for (const q of questions) {
+        const internal = toInternal(toQuestionDef(task, q, mode));
+        const { stats } = buildSequence(core.tok, state, internal, probe, core.cfg.head_max_len);
+        overhead = Math.max(overhead, stats.totalTokens - stats.stateTokensUsed);
+      }
+      const need = stateTokens + overhead;
+      // Nothing large enough: take the largest and let the truncation be reported
+      // rather than silently choosing a budget that does not fit either.
+      return choices.find((b) => b >= need) ?? probe;
+    })();
+
   for (const q of questions) {
     const internal = toInternal(toQuestionDef(task, q, mode));
     const k = renderOptions(internal).length;
-    const { markers, stats } = buildSequence(core.tok, state, internal, maxLen, core.cfg.head_max_len);
+    const { markers, stats } = buildSequence(core.tok, state, internal, effective, core.cfg.head_max_len);
     perQuestion.push({
       uid: q.uid,
       stats,
@@ -81,7 +105,8 @@ export function analyse(
   return {
     perQuestion,
     stateTokens,
-    maxLen,
+    maxLen: effective,
+    auto: maxLen === null,
     trainedMaxLen: core.cfg.max_len,
     headMaxLen: core.cfg.head_max_len,
     // Math.min of an empty list is Infinity, which would render as "∞ tokens left".
