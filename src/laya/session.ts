@@ -175,6 +175,18 @@ export async function loadCore(base: string): Promise<Core> {
 
 export class LayaSession {
   readonly cfg: LayaConfig;
+  /** Sequence budget actually used, which may exceed `cfg.max_len`.
+   *
+   *  The 512 in rl_agent_config.json is a configuration value, not a property of the
+   *  graph: the exported encoder declares a dynamic `seq_len` axis and uses rotary
+   *  embeddings rather than a learned position table, so there is no length baked into
+   *  the weights. ModernBERT-large is a 8192-context backbone.
+   *
+   *  What 512 *does* mark is the length Laya was trained and temperature-fitted at.
+   *  Beyond it the model still runs and the numbers still look like probabilities;
+   *  whether they mean anything is unmeasured. The UI labels that, and never raises
+   *  this on its own. */
+  maxLen: number;
   /** Threads asked for. */
   readonly requestedThreads: number;
   /** Threads the run can actually use.
@@ -193,6 +205,7 @@ export class LayaSession {
 
   private constructor(cfg: LayaConfig, tok: Tok, enc: ort.InferenceSession, head: ort.InferenceSession, requestedThreads: number) {
     this.cfg = cfg;
+    this.maxLen = cfg.max_len;
     this.tok = tok;
     this.enc = enc;
     this.head = head;
@@ -289,7 +302,7 @@ export class LayaSession {
       const qt0 = performance.now();
       const q = toInternal(qdef);
       const k = renderOptions(q).length;
-      const { ids, markers, stats } = buildSequence(this.tok, state, q, this.cfg.max_len, this.cfg.head_max_len);
+      const { ids, markers, stats } = buildSequence(this.tok, state, q, this.maxLen, this.cfg.head_max_len);
       if (markers.length !== k) {
         throw new Error(`question ${JSON.stringify(qid)}: options do not fit in head_max_len=${this.cfg.head_max_len} tokens`);
       }

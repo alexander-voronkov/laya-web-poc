@@ -50,7 +50,7 @@ interface RunRecord {
 export default function App() {
   const laya = useLaya();
   const [session, setSession] = useState(loadSession);
-  const { text, task, framing, questions, counter } = session;
+  const { text, task, framing, questions, counter, maxLen } = session;
 
   const [live, setLive] = useState<Landed[]>([]);
   const [result, setResult] = useState<RunRecord | null>(null);
@@ -86,7 +86,7 @@ export default function App() {
       // render effect with no error boundary above it is a blank page, so this one
       // degrades to "budget unknown" instead.
       try {
-        setBudget(analyse(core, task, text, questions, framing));
+        setBudget(analyse(core, task, text, questions, framing, maxLen ?? core.cfg.max_len));
         setBudgetError(null);
       } catch (e) {
         setBudget(null);
@@ -94,7 +94,7 @@ export default function App() {
       }
     }, 250);
     return () => clearTimeout(t);
-  }, [laya.core, task, text, questions, framing]);
+  }, [laya.core, task, text, questions, framing, maxLen]);
 
   const byUid = useMemo(() => new Map((budget?.perQuestion ?? []).map((b) => [b.uid, b])), [budget]);
 
@@ -130,6 +130,8 @@ export default function App() {
     const order = new Map(questions.map((q, i) => [q.id, i]));
     const landed: Landed[] = [];
 
+    // The budget in force has to reach the session before the first sequence is built.
+    s.maxLen = maxLen ?? s.cfg.max_len;
     const ctl = new AbortController();
     abortRef.current = ctl;
     setRunning(true);
@@ -165,7 +167,7 @@ export default function App() {
       setRunning(false);
       abortRef.current = null;
     }
-  }, [laya.session, running, issues, broken, questions, task, text, framing]);
+  }, [laya.session, running, issues, broken, questions, task, text, framing, maxLen]);
 
   const exportJson = useCallback(() => {
     if (!result) return;
@@ -174,7 +176,8 @@ export default function App() {
       model: {
         base: MODELS_BASE,
         quant: "q8 weight-only (MatMulNBits), onnxruntime-web/wasm",
-        maxLen: laya.core?.cfg.max_len ?? null,
+        maxLen: maxLen ?? laya.core?.cfg.max_len ?? null,
+        trainedMaxLen: laya.core?.cfg.max_len ?? null,
         headMaxLen: laya.core?.cfg.head_max_len ?? null,
         calibration:
           "temperatures were fitted by the original author on the fp32 model and not refitted " +
@@ -270,6 +273,13 @@ export default function App() {
                 <span className="warn">the tail of the text is being cut — which question, and by how much, is on its card</span>
               )}
             </div>
+            {budget && (
+              <ContextBudget
+                value={maxLen ?? budget.trainedMaxLen}
+                trained={budget.trainedMaxLen}
+                onChange={(v) => patch({ maxLen: v === budget.trainedMaxLen ? null : v })}
+              />
+            )}
           </section>
 
           <section className="card">
@@ -402,6 +412,49 @@ export default function App() {
 
       <LoadOverlay phase={laya.phase} error={laya.error} files={laya.files} onRetry={laya.retry} />
     </>
+  );
+}
+
+const BUDGETS = [512, 1024, 2048, 4096, 8192];
+
+/** Raising this is an experiment, and the UI says so rather than offering it as a
+ *  feature that merely costs time.
+ *
+ *  The 512 is not a property of the graph: the exported encoder declares a dynamic
+ *  `seq_len` axis and uses rotary embeddings instead of a learned position table, and
+ *  ModernBERT-large is an 8192-context backbone. What 512 marks is the length Laya was
+ *  trained and temperature-fitted at. Past it the forward pass still runs and still
+ *  returns numbers between 0 and 1 — which is exactly the problem, because nothing
+ *  about them has been measured there. Compare a long text against its truncated self
+ *  before trusting the longer answer. */
+function ContextBudget({ value, trained, onChange }: {
+  value: number; trained: number; onChange: (v: number) => void;
+}) {
+  return (
+    <div className="field">
+      <label htmlFor="ctx-budget">Sequence budget</label>
+      <div className="radio-row">
+        <select id="ctx-budget" value={value} onChange={(e) => onChange(Number(e.target.value))}>
+          {BUDGETS.map((b) => (
+            <option key={b} value={b}>
+              {b} tokens{b === trained ? " — as trained" : " — beyond training"}
+            </option>
+          ))}
+        </select>
+        {value > trained && (
+          <span className="warn">
+            {value} &gt; {trained}: the model runs at this length, but it was never trained or
+            calibrated there. Check a long text against its truncated self before believing the
+            longer answer.
+          </span>
+        )}
+      </div>
+      <div className="field-note">
+        The text gets whatever this leaves after the question head. A larger budget also costs
+        time steeply: attention is quadratic in the length, and the encoder is already most of
+        the run.
+      </div>
+    </div>
   );
 }
 

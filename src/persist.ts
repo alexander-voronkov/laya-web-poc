@@ -23,6 +23,8 @@ const VERSION = 1;
 
 export interface Session {
   version: number;
+  /** Sequence budget, or null to use the checkpoint default. */
+  maxLen: number | null;
   text: string;
   task: string;
   framing: FramingMode;
@@ -34,6 +36,7 @@ export function defaultSession(): Session {
   const seed = seedQuestions();
   return {
     version: VERSION,
+    maxLen: null,
     text: SEED_TEXT,
     task: SEED_TASK,
     framing: "instructions",
@@ -52,6 +55,7 @@ interface RawSession {
   framing: unknown;
   questions: unknown;
   counter: unknown;
+  maxLen?: unknown;
 }
 
 function isRawSession(v: unknown): v is RawSession {
@@ -142,6 +146,12 @@ export function loadSession(): Session {
       task: parsed.task as string,
       framing: parsed.framing as FramingMode,
       counter: parsed.counter as number,
+      // Absent in drafts saved before the setting existed, and a hand-edited value
+      // must not reach the tensor shape: clamp to a sane window or fall back.
+      maxLen:
+        typeof parsed.maxLen === "number" && Number.isFinite(parsed.maxLen)
+          ? Math.min(8192, Math.max(128, Math.round(parsed.maxLen)))
+          : null,
       questions: (parsed.questions as unknown[]).map(toQuestion),
     };
   } catch {

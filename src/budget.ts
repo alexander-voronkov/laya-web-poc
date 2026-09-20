@@ -33,7 +33,12 @@ export interface Budget {
   perQuestion: QuestionBudget[];
   /** Tokens the text needs in full, independent of any question. */
   stateTokens: number;
+  /** Budget in force. */
   maxLen: number;
+  /** Budget the checkpoint was trained and temperature-fitted at. Beyond it the model
+   *  still runs -- the graph has a dynamic sequence axis and rotary embeddings -- but
+   *  nothing about the answers has been measured there. */
+  trainedMaxLen: number;
   headMaxLen: number;
   /** Fewest state tokens any single question leaves room for. */
   worstStateUsed: number;
@@ -52,6 +57,8 @@ export function analyse(
   text: string,
   questions: QuestionItem[],
   mode: FramingMode,
+  /** Sequence budget in force, which the UI may have raised above cfg.max_len. */
+  maxLen: number = core.cfg.max_len,
 ): Budget {
   const state = buildState(task, text, mode);
   const stateTokens = core.tok.encode(state, { add_special_tokens: false }).length;
@@ -60,7 +67,7 @@ export function analyse(
   for (const q of questions) {
     const internal = toInternal(toQuestionDef(task, q, mode));
     const k = renderOptions(internal).length;
-    const { markers, stats } = buildSequence(core.tok, state, internal, core.cfg.max_len, core.cfg.head_max_len);
+    const { markers, stats } = buildSequence(core.tok, state, internal, maxLen, core.cfg.head_max_len);
     perQuestion.push({
       uid: q.uid,
       stats,
@@ -74,7 +81,8 @@ export function analyse(
   return {
     perQuestion,
     stateTokens,
-    maxLen: core.cfg.max_len,
+    maxLen,
+    trainedMaxLen: core.cfg.max_len,
     headMaxLen: core.cfg.head_max_len,
     // Math.min of an empty list is Infinity, which would render as "∞ tokens left".
     worstStateUsed: perQuestion.length
