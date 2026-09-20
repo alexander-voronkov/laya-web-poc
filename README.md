@@ -88,31 +88,22 @@ Cross-Origin-Opener-Policy: same-origin
 Cross-Origin-Embedder-Policy: require-corp
 ```
 
-nginx (this is the live config, trimmed):
+The live config is vendored at [`deploy/nginx-laya.voronkov.club.conf`](deploy/nginx-laya.voronkov.club.conf) — the server is not the only copy. To apply it:
 
-```nginx
-server {
-    server_name laya.voronkov.club;
-    root /srv/laya-web-poc/site;
-    index index.html;
-
-    add_header Cross-Origin-Opener-Policy same-origin always;
-    add_header Cross-Origin-Embedder-Policy require-corp always;
-
-    gzip on;
-    gzip_types application/wasm application/javascript text/css application/json;
-    gzip_min_length 1024;
-
-    location /assets/ { expires 30d; }
-    location / { try_files $uri $uri/ /index.html; }
-}
+```bash
+scp deploy/nginx-laya.voronkov.club.conf user@host:/tmp/laya.conf
+ssh user@host 'sudo cp -a /etc/nginx/sites-available/laya.voronkov.club{,.bak-$(date +%F-%H%M%S)} \
+  && sudo cp /tmp/laya.conf /etc/nginx/sites-available/laya.voronkov.club \
+  && sudo nginx -t && sudo systemctl reload nginx'
 ```
 
 Notes:
 
 - `require-corp` (not `credentialless`) works with the Hugging Face CDN even though the CDN sends no CORP header: the weights are loaded with `fetch()` in CORS mode, and CORP enforcement only applies to no-cors subresource loads. `credentialless` would look equivalent and silently lose isolation in Safari, which does not implement it.
 - The ORT loader is served as `.js`, not `.mjs`, and `wasmPaths` names both runtime files explicitly. nginx's stock `mime.types` has no entry for `.mjs`, so it goes out as `application/octet-stream`; browsers apply a strict MIME check to dynamic `import()` and reject the module. ORT then reports `no available backend found`, naming neither the file nor the reason, while the file itself returns a perfectly healthy 200. This shipped, and the model loaded for nobody. Adding `.mjs` to the server's MIME map fixes it too and is worth doing — but the app no longer depends on the host knowing an extension it need not know.
-- The headers live in the `server` block, not in a `location` — an `add_header` inside `location /assets/` would otherwise drop the inherited ones.
+- The headers live in the `server` block, not in a `location` — an `add_header` inside a location **replaces** the inherited set rather than extending it, so any location adding a header of its own must repeat these two. (`expires` is a different directive and does not have that effect, which is why the cache rules are safe.) The same trap applies to `types`: a `types { application/javascript mjs; }` inside the server block would replace the whole inherited MIME map and send CSS, PNG and WASM out as `application/octet-stream`.
+- `/assets/` and `/ort/` use `try_files $uri =404`. Without it the SPA fallback answers **200 with the HTML page** for any missing build artefact, which is how a missing runtime file passed a status-code check while the model loaded for nobody. The deploy job asserts both directions: the real files by content type, and a deliberately absent one by its 404.
+- `/assets/` is cached for 30 days because Vite content-hashes those filenames. `/ort/` deliberately is not: `ort-wasm-simd-threaded.{js,wasm}` keep the same names across builds, so a long-lived cached copy would outlive an onnxruntime upgrade and pair a new app with an old runtime.
 - Without these headers the page still works, but wasm falls back to a single thread and inference is roughly 6× slower. The metrics panel says so when it happens rather than leaving you to wonder why it is slow.
 - The dev server sets both headers itself — see the `crossOriginIsolation` plugin in `vite.config.ts`.
 
