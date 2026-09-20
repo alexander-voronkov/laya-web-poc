@@ -219,6 +219,19 @@ export default function App() {
   // count: the question head and its options take their share of the 512 first.
   const headroom = budget ? budget.maxLen - budget.worstTotalTokens : null;
 
+  // How large the budget would have to be for the whole text to reach the model.
+  // Reporting that a text is being cut without saying what would fix it leaves the
+  // reader to work out the arithmetic of a head they cannot see.
+  const neededBudget = useMemo(() => {
+    if (!budget || !budget.anyTruncated) return null;
+    const worstOverhead = Math.max(
+      ...budget.perQuestion.map((p) => p.stats.totalTokens - p.stats.stateTokensUsed),
+      0,
+    );
+    const need = budget.stateTokens + worstOverhead;
+    return BUDGETS.find((b) => b >= need) ?? null;
+  }, [budget]);
+
   return (
     <>
       <div id="app">
@@ -270,7 +283,20 @@ export default function App() {
                       : "")}
               </span>
               {budget?.anyTruncated && (
-                <span className="warn">the tail of the text is being cut — which question, and by how much, is on its card</span>
+                <span className="warn">
+                  the tail of the text is being cut — which question, and by how much, is on its card.
+                  {neededBudget ? (
+                    <>
+                      {" "}
+                      <button className="link-btn" onClick={() => patch({ maxLen: neededBudget })}>
+                        raise the budget to {neededBudget} so all {budget.stateTokens} tokens fit
+                      </button>
+                      {neededBudget > budget.trainedMaxLen && " (past the trained length — see below)"}
+                    </>
+                  ) : (
+                    ` even ${BUDGETS[BUDGETS.length - 1]} tokens would not hold all ${budget.stateTokens}.`
+                  )}
+                </span>
               )}
             </div>
             {budget && (
@@ -443,9 +469,12 @@ function ContextBudget({ value, trained, onChange }: {
         </select>
         {value > trained && (
           <span className="warn">
-            {value} &gt; {trained}: the model runs at this length, but it was never trained or
-            calibrated there. Check a long text against its truncated self before believing the
-            longer answer.
+            {value} &gt; {trained}: past the length this checkpoint was trained and
+            temperature-fitted at. The long range does work — on a 653-token review whose closing
+            paragraph retracts everything before it, p(recommends) went 64.3% at 512, where the
+            retraction is truncated away, to 3.1% at 1024, where it is not. What that measurement
+            does not show is whether the probabilities stay calibrated out here, only that the
+            model reads the text. Treat a long-context number as an ordering.
           </span>
         )}
       </div>
