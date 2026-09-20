@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Laya web PoC — калиброванные вероятностные ответы по вашим вопросам, модель считается целиком в браузере."
+    />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%234f46e5'/%3E%3Ctext x='16' y='22' font-size='16' text-anchor='middle' fill='white' font-family='sans-serif'%3EL%3C/text%3E%3C/svg%3E" />
+    <title>Laya · web PoC</title>
+  </head>
+  <body>
+    <div id="app">
+      <header>
+        <h1>Laya · web PoC</h1>
+        <p class="tagline">
+          Калиброванные вероятности по вашим вопросам. Модель (ModernBERT-large, q8) считается целиком в
+          браузере через onnxruntime-web/wasm — данные не покидают компьютер.
+        </p>
+      </header>
+
+      <main>
+        <section class="card">
+          <h2>1 · Текст</h2>
+          <label for="state-text">Текст для анализа (state)</label>
+          <textarea
+            id="state-text"
+            rows="10"
+            placeholder="Вставьте текст… Например: The committee met on Thursday and approved the proposal with minor amendments…"
+          ></textarea>
+          <div class="note-row">
+            <span id="state-tokens" class="muted">токены текста: —</span>
+            <span id="state-warn" class="warn hidden">
+              текст длиннее бюджета модели (512 токенов вместе с вопросом) — хвост будет обрезан
+            </span>
+          </div>
+          <div class="field-note">Модель англоязычная: с английским текстом качество заметно выше.</div>
+        </section>
+
+        <section class="card">
+          <h2>2 · Задача</h2>
+          <label for="task-text">Как интерпретировать текст</label>
+          <textarea
+            id="task-text"
+            rows="2"
+            placeholder="например: Read the text as a literary critic"
+          ></textarea>
+          <div class="field-note">Задача добавляется в начало формулировки каждого вопроса.</div>
+        </section>
+
+        <section class="card">
+          <h2>3 · Вопросы</h2>
+          <div id="questions"></div>
+          <div class="add-q-row">
+            <select id="new-q-type">
+              <option value="noul">Бинарный (0–100)</option>
+              <option value="choice">Выбор из списка</option>
+              <option value="score">Шкала (ожидание по уровням)</option>
+            </select>
+            <button id="add-q" class="btn">Добавить вопрос</button>
+          </div>
+        </section>
+
+        <section class="card run-card">
+          <button id="run" class="btn primary" disabled>Получить ответы</button>
+          <span id="run-status" class="muted"></span>
+        </section>
+
+        <section class="card hidden" id="results-card">
+          <h2>Ответы</h2>
+          <div id="results"></div>
+        </section>
+
+        <section class="card">
+          <h2>Метрики</h2>
+          <div id="metrics"></div>
+          <div class="metrics-actions">
+            <button id="export-json" class="btn" disabled>Экспорт JSON прогона</button>
+          </div>
+        </section>
+      </main>
+
+      <footer>
+        <p>
+          Прототип на базе <a href="https://github.com/nvkudva/laya-web" target="_blank" rel="noreferrer">nvkudva/laya-web</a>
+          (порт модели) и весов <a href="https://huggingface.co/nvkudva/laya-web-q8" target="_blank" rel="noreferrer">nvkudva/laya-web-q8</a>
+          · базовая модель <a href="https://huggingface.co/convaiinnovations/laya" target="_blank" rel="noreferrer">convaiinnovations/laya</a>
+          · лицензия Apache-2.0
+        </p>
+      </footer>
+    </div>
+
+    <div id="overlay">
+      <div class="overlay-card">
+        <h3>Загрузка модели</h3>
+        <p class="muted">~524 МБ, только при первом открытии: файлы кэшируются браузером, в следующий раз — почти мгновенно.</p>
+        <div id="ov-files"></div>
+        <div id="ov-status" class="muted">подготовка…</div>
+        <button id="ov-retry" class="btn hidden">Повторить</button>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
