@@ -219,6 +219,19 @@ export default function App() {
   // count: the question head and its options take their share of the 512 first.
   const headroom = budget ? budget.maxLen - budget.worstTotalTokens : null;
 
+  // How large the budget would have to be for the whole text to reach the model.
+  // Reporting that a text is being cut without saying what would fix it leaves the
+  // reader to work out the arithmetic of a head they cannot see.
+  const neededBudget = useMemo(() => {
+    if (!budget || !budget.anyTruncated) return null;
+    const worstOverhead = Math.max(
+      ...budget.perQuestion.map((p) => p.stats.totalTokens - p.stats.stateTokensUsed),
+      0,
+    );
+    const need = budget.stateTokens + worstOverhead;
+    return BUDGETS.find((b) => b >= need) ?? null;
+  }, [budget]);
+
   return (
     <>
       <div id="app">
@@ -270,7 +283,20 @@ export default function App() {
                       : "")}
               </span>
               {budget?.anyTruncated && (
-                <span className="warn">the tail of the text is being cut — which question, and by how much, is on its card</span>
+                <span className="warn">
+                  the tail of the text is being cut — which question, and by how much, is on its card.
+                  {neededBudget ? (
+                    <>
+                      {" "}
+                      <button className="link-btn" onClick={() => patch({ maxLen: neededBudget })}>
+                        raise the budget to {neededBudget} so all {budget.stateTokens} tokens fit
+                      </button>
+                      {neededBudget > budget.trainedMaxLen && " (past the trained length — see below)"}
+                    </>
+                  ) : (
+                    ` even ${BUDGETS[BUDGETS.length - 1]} tokens would not hold all ${budget.stateTokens}.`
+                  )}
+                </span>
               )}
             </div>
             {budget && (
