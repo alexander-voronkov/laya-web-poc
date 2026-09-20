@@ -1,0 +1,33 @@
+laya-web-poc
+Copyright 2026 Alexander Voronkov
+
+This product includes software developed as part of the Laya project.
+
+--------------------------------------------------------------------------------
+src/laya/*
+--------------------------------------------------------------------------------
+The browser runtime for Laya under src/laya/ (tokenizer, sequence construction,
+post-processing and the onnxruntime-web session) is derived from
+
+    https://github.com/nvkudva/laya-web  (app/src/laya/)
+    Copyright (c) nvkudva
+    Licensed under the Apache License, Version 2.0
+
+which is in turn a TypeScript port of the reference implementation
+
+    https://github.com/NandhaKishorM/laya
+    Copyright (c) Nandakishor M / Convai Innovations
+    Licensed under the Apache License, Version 2.0
+
+Local modifications are marked with `// laya-web-poc:` comments and consist of
+per-question telemetry (timings, token accounting, truncation reporting) and a
+configurable weights base URL. The tokenization and sequence-construction logic
+is deliberately left byte-identical to the upstream port, because token-for-token
+equality with the Python reference is what makes the probabilities comparable.
+
+--------------------------------------------------------------------------------
+Model weights
+--------------------------------------------------------------------------------
+Weights are fetched at runtime from https://huggingface.co/nvkudva/laya-web-q8
+(Apache 2.0, quantized from convaiinnovations/laya). They are not redistributed
+by this repository.
