@@ -22,6 +22,8 @@ import { MetricsPanel } from "./ui/MetricsPanel";
 import { QuestionCard } from "./ui/QuestionEditor";
 import { sec } from "./format";
 
+const BUDGETS = [512, 1024, 2048, 4096, 8192];
+
 interface Landed {
   question: QuestionItem;
   index: number;
@@ -42,6 +44,8 @@ interface RunRecord {
   request: Questions;
   input: { text: string; task: string; framing: FramingMode; questions: QuestionItem[] };
   requested: number;
+  /** Sequence budget this run actually used. */
+  maxLen: number;
   landed: Landed[];
   telemetry: { questions: QuestionTelemetry[]; totalMs: number };
   aborted: boolean;
@@ -86,7 +90,7 @@ export default function App() {
       // render effect with no error boundary above it is a blank page, so this one
       // degrades to "budget unknown" instead.
       try {
-        setBudget(analyse(core, task, text, questions, framing, maxLen ?? core.cfg.max_len));
+        setBudget(analyse(core, task, text, questions, framing, maxLen, BUDGETS));
         setBudgetError(null);
       } catch (e) {
         setBudget(null);
@@ -118,6 +122,14 @@ export default function App() {
       return;
     }
 
+    // Resolved fresh rather than read off the debounced panel state: a run started
+    // straight after a keystroke would otherwise use the previous text's budget.
+    const core = laya.core;
+    const resolved = core
+      ? analyse(core, task, text, questions, framing, maxLen, BUDGETS).maxLen
+      : (maxLen ?? s.cfg.max_len);
+    s.maxLen = resolved;
+
     // Freeze the request now. Everything the export reports comes from these values,
     // never from the editor as it stands when the export button is pressed.
     const snapshot = {
@@ -126,12 +138,11 @@ export default function App() {
       request: toRequest(task, questions, framing),
       input: { text, task, framing, questions: structuredClone(questions) },
       requested: questions.length,
+      maxLen: resolved,
     };
     const order = new Map(questions.map((q, i) => [q.id, i]));
     const landed: Landed[] = [];
 
-    // The budget in force has to reach the session before the first sequence is built.
-    s.maxLen = maxLen ?? s.cfg.max_len;
     const ctl = new AbortController();
     abortRef.current = ctl;
     setRunning(true);
@@ -167,7 +178,7 @@ export default function App() {
       setRunning(false);
       abortRef.current = null;
     }
-  }, [laya.session, running, issues, broken, questions, task, text, framing, maxLen]);
+  }, [laya.session, laya.core, running, issues, broken, questions, task, text, framing, maxLen]);
 
   const exportJson = useCallback(() => {
     if (!result) return;
@@ -176,7 +187,8 @@ export default function App() {
       model: {
         base: MODELS_BASE,
         quant: "q8 weight-only (MatMulNBits), onnxruntime-web/wasm",
-        maxLen: maxLen ?? laya.core?.cfg.max_len ?? null,
+        maxLen: result.maxLen,
+        maxLenChosenAutomatically: maxLen === null,
         trainedMaxLen: laya.core?.cfg.max_len ?? null,
         headMaxLen: laya.core?.cfg.head_max_len ?? null,
         calibration:
@@ -301,9 +313,10 @@ export default function App() {
             </div>
             {budget && (
               <ContextBudget
-                value={maxLen ?? budget.trainedMaxLen}
+                value={maxLen}
+                resolved={budget.maxLen}
                 trained={budget.trainedMaxLen}
-                onChange={(v) => patch({ maxLen: v === budget.trainedMaxLen ? null : v })}
+                onChange={(v) => patch({ maxLen: v })}
               />
             )}
           </section>
@@ -441,35 +454,43 @@ export default function App() {
   );
 }
 
-const BUDGETS = [512, 1024, 2048, 4096, 8192];
 
-/** Raising this is an experiment, and the UI says so rather than offering it as a
- *  feature that merely costs time.
+/** Defaults to fitting the text, because truncating it silently is the worse default
+ *  and the long range has now been measured rather than assumed.
  *
  *  The 512 is not a property of the graph: the exported encoder declares a dynamic
  *  `seq_len` axis and uses rotary embeddings instead of a learned position table, and
  *  ModernBERT-large is an 8192-context backbone. What 512 marks is the length Laya was
  *  trained and temperature-fitted at. Past it the forward pass still runs and still
  *  returns numbers between 0 and 1 — which is exactly the problem, because nothing
- *  about them has been measured there. Compare a long text against its truncated self
- *  before trusting the longer answer. */
-function ContextBudget({ value, trained, onChange }: {
-  value: number; trained: number; onChange: (v: number) => void;
+ *  about them has been *calibrated* there. What has been measured is that the model
+ *  genuinely reads the extra tokens: on a 653-token review whose last paragraph
+ *  retracts the rest, p(recommends) is 64.3% at 512 (retraction truncated away) and
+ *  3.1% at 1024 (retraction in range). Cost measured on the same machine: 11 s at 512,
+ *  16 s at 1024 — ModernBERT alternates local and global attention, so the growth is
+ *  far gentler than the quadratic worst case. */
+function ContextBudget({ value, resolved, trained, onChange }: {
+  value: number | null; resolved: number; trained: number; onChange: (v: number | null) => void;
 }) {
   return (
     <div className="field">
       <label htmlFor="ctx-budget">Sequence budget</label>
       <div className="radio-row">
-        <select id="ctx-budget" value={value} onChange={(e) => onChange(Number(e.target.value))}>
+        <select
+          id="ctx-budget"
+          value={value === null ? "auto" : value}
+          onChange={(e) => onChange(e.target.value === "auto" ? null : Number(e.target.value))}
+        >
+          <option value="auto">Fit the text — now {resolved}</option>
           {BUDGETS.map((b) => (
             <option key={b} value={b}>
               {b} tokens{b === trained ? " — as trained" : " — beyond training"}
             </option>
           ))}
         </select>
-        {value > trained && (
+        {resolved > trained && (
           <span className="warn">
-            {value} &gt; {trained}: past the length this checkpoint was trained and
+            {resolved} &gt; {trained}: past the length this checkpoint was trained and
             temperature-fitted at. The long range does work — on a 653-token review whose closing
             paragraph retracts everything before it, p(recommends) went 64.3% at 512, where the
             retraction is truncated away, to 3.1% at 1024, where it is not. What that measurement
@@ -479,9 +500,9 @@ function ContextBudget({ value, trained, onChange }: {
         )}
       </div>
       <div className="field-note">
-        The text gets whatever this leaves after the question head. A larger budget also costs
-        time steeply: attention is quadratic in the length, and the encoder is already most of
-        the run.
+        The text gets whatever this leaves after the question head. Longer costs more time, but
+        less than quadratically: 11 s at 512 and 16 s at 1024 on a 16-core laptop, because
+        ModernBERT alternates local and global attention layers.
       </div>
     </div>
   );
