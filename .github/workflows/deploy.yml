@@ -108,9 +108,12 @@ jobs:
           set -euo pipefail
           # Cache-buster: nginx serves /assets/ with expires 30d, and a CDN or proxy in
           # front would otherwise answer from the previous deploy.
-          served=$(curl -fsS "$SITE/version.txt?cb=$GITHUB_RUN_ID" | tr -d '\r\n')
+          # A missing version.txt does not 404 here either -- try_files serves the HTML
+          # page -- so this compares content, not status, and truncates in case the
+          # answer turns out to be a whole page.
+          served=$(curl -fsS "$SITE/version.txt?cb=$GITHUB_RUN_ID" | tr -d '\r\n' | head -c 80)
           if [ "$served" != "$GITHUB_SHA" ]; then
-            echo "::error::Live site serves $served, expected $GITHUB_SHA — the upload did not reach the docroot nginx reads."
+            echo "::error::Live site serves '$served', expected '$GITHUB_SHA' — the upload did not reach the docroot nginx reads."
             exit 1
           fi
           echo "live build: $served"
@@ -128,8 +131,13 @@ jobs:
             || { echo "::error::COOP is not exactly same-origin"; exit 1; }
           echo "$headers" | tr -d '\r' | grep -iqE '^cross-origin-embedder-policy:[[:space:]]*require-corp[[:space:]]*$' \
             || { echo "::error::COEP is not exactly require-corp"; exit 1; }
-          # The wasm runtime lives under /ort/, which nginx serves through a different
-          # location block than /; check the headers survive there too.
+          # The wasm runtime lives under /ort/. Two things are checked here, and the
+          # second is not redundant: nginx answers with `try_files $uri $uri/
+          # /index.html`, so a *missing* runtime returns 200 with the HTML page. Status
+          # alone -- which is all `curl -f` looks at -- cannot tell the two apart, and a
+          # site whose wasm never loads would verify clean. The content type can.
           ort=$(curl -fsS -D - -o /dev/null "$SITE/ort/ort-wasm-simd-threaded.wasm")
+          echo "$ort" | tr -d '\r' | grep -iqE '^content-type:[[:space:]]*application/wasm' \
+            || { echo "::error::/ort/ runtime is not being served as application/wasm — nginx fell through to index.html, i.e. the file is missing"; exit 1; }
           echo "$ort" | tr -d '\r' | grep -iqE '^cross-origin-embedder-policy:[[:space:]]*require-corp[[:space:]]*$' \
             || { echo "::error::COEP missing on /ort/ — the wasm runtime would not load isolated"; exit 1; }
