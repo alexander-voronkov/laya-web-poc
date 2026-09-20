@@ -7,9 +7,17 @@
 // We only ever use the wasm EP (WebGPU does not implement 8-bit MatMulNBits anyway).
 import * as ort from "onnxruntime-web/wasm";
 import { buildSequence, renderOptions, toInternal, type Tok } from "./sequence";
-import { formatAnswer, softmax, temperatureFor } from "./postprocess";
+import { formatAnswer, softmax, tempBucket, temperatureFor } from "./postprocess";
 import { loadTokenizer } from "./tokenizer";
-import { QTYPES, type LayaConfig, type LayaResponse, type Questions, type State } from "./types";
+import {
+  QTYPES,
+  type Answer,
+  type LayaConfig,
+  type LayaResponse,
+  type QuestionTelemetry,
+  type Questions,
+  type State,
+} from "./types";
 
 export interface LoadProgress {
   file: string;
@@ -93,11 +101,37 @@ export async function deleteWeightCache(): Promise<void> {
   try { await caches.delete(CACHE); } catch { /* blocked storage */ }
 }
 
+export interface RunOptions {
+  /** Checked between questions only -- see the note on systemOne. */
+  signal?: AbortSignal;
+  /** Fires as each answer lands, so a long batch fills the page progressively. */
+  onAnswer?: (qid: string, answer: Answer, telemetry: QuestionTelemetry) => void;
+}
+
+export interface RunResult {
+  response: LayaResponse;
+  telemetry: { questions: QuestionTelemetry[]; totalMs: number };
+  /** True when the run stopped early because the signal aborted. */
+  aborted: boolean;
+}
+
+/** usedJSHeapSize where the browser exposes it (Chromium), null elsewhere. Reported
+ *  as "unavailable" rather than 0, because a 0 reads as "used no memory". */
+export function jsHeapBytes(): number | null {
+  const m = (performance as unknown as { memory?: { usedJSHeapSize?: number } }).memory;
+  return typeof m?.usedJSHeapSize === "number" ? m.usedJSHeapSize : null;
+}
+
 /** Fetch rl_agent_config.json + tokenizer.json -- small enough to drive the live
  *  token counter before any weights are downloaded. */
 export async function loadCore(base: string): Promise<Core> {
   const [cfg, tok] = await Promise.all([
-    fetch(`${base}/rl_agent_config.json`).then((r) => r.json() as Promise<LayaConfig>),
+    // r.json() on a 404 surfaces as "Unexpected token <", which sends the reader
+    // looking for a parser bug instead of a wrong VITE_MODELS_BASE.
+    fetch(`${base}/rl_agent_config.json`).then((r) => {
+      if (!r.ok) throw new Error(`${base}/rl_agent_config.json: ${r.status} ${r.statusText}`);
+      return r.json() as Promise<LayaConfig>;
+    }),
     loadTokenizer(base),
   ]);
   return { cfg, tok };
@@ -158,22 +192,43 @@ export class LayaSession {
     return new LayaSession(core.cfg, core.tok, enc, head, threads);
   }
 
-  /** questions: {id: {type, instructions, criteria}} -- the Jev request shape. */
-  async systemOne(state: State, questions: Questions): Promise<LayaResponse> {
-    const out: LayaResponse = { model: "rl-agent", answers: {}, usage: { input_tokens: 0, output_tokens: 0 } };
+  /** questions: {id: {type, instructions, criteria}} -- the Jev request shape.
+   *
+   *  One shared state, N independent questions. Batching saves the 524MB download,
+   *  not the forward passes: the head scores option markers inside the same sequence,
+   *  so the state is re-encoded per question and cost grows linearly with N.
+   *
+   *  laya-web-poc: returns per-question telemetry alongside the answers, streams each
+   *  answer through `onAnswer` as it lands, and honours an AbortSignal *between*
+   *  questions. Deliberately not during one: a forward pass already inside wasm
+   *  cannot be cancelled, and racing a timeout against it would abandon a session
+   *  that keeps running and keeps holding its 524MB.
+   */
+  async systemOne(state: State, questions: Questions, opts: RunOptions = {}): Promise<RunResult> {
+    const out: LayaResponse = { model: "laya-web-q8", answers: {}, usage: { input_tokens: 0, output_tokens: 0 } };
+    const perQuestion: QuestionTelemetry[] = [];
+    const t0 = performance.now();
+    let aborted = false;
+
     for (const [qid, qdef] of Object.entries(questions)) {
+      if (opts.signal?.aborted) { aborted = true; break; }
+      const qt0 = performance.now();
       const q = toInternal(qdef);
       const k = renderOptions(q).length;
-      const { ids, markers } = buildSequence(this.tok, state, q, this.cfg.max_len, this.cfg.head_max_len);
+      const { ids, markers, stats } = buildSequence(this.tok, state, q, this.cfg.max_len, this.cfg.head_max_len);
       if (markers.length !== k) {
         throw new Error(`question ${JSON.stringify(qid)}: options do not fit in head_max_len=${this.cfg.head_max_len} tokens`);
       }
+      const buildMs = performance.now() - qt0;
       const L = ids.length;
       const att = new ort.Tensor("int64", new BigInt64Array(L).fill(1n), [1, L]);
+      const e0 = performance.now();
       const { hidden } = await this.enc.run({
         input_ids: new ort.Tensor("int64", BigInt64Array.from(ids, (x) => BigInt(x)), [1, L]),
         attention_mask: att,
       });
+      const encoderMs = performance.now() - e0;
+      const h0 = performance.now();
       const r = await this.head.run({
         hidden,
         attention_mask: att,
@@ -181,13 +236,34 @@ export class LayaSession {
         marker_mask: new ort.Tensor("bool", new Uint8Array(markers.length).fill(1), [1, markers.length]),
         qtype: new ort.Tensor("int64", BigInt64Array.from([QTYPES[q.t]], (x) => BigInt(x)), [1]),
       });
+      const headMs = performance.now() - h0;
       const logits = Array.from(r.logits.data as Float32Array).slice(0, k);
-      const temp = temperatureFor(this.cfg, QTYPES[q.t], k);
-      const p = softmax(logits.map((v) => v / temp));
+      const temperature = temperatureFor(this.cfg, QTYPES[q.t], k);
+      const p = softmax(logits.map((v) => v / temperature));
       const act = softmax(Array.from(r.act_logits.data as Float32Array));
-      out.answers[qid] = formatAnswer(q, p, act[0]);
+      const answer = formatAnswer(q, p, act[0]);
+      out.answers[qid] = answer;
       out.usage.input_tokens += L;
+
+      const tel: QuestionTelemetry = {
+        qid,
+        type: q.t,
+        options: k,
+        temperatureBucket: tempBucket(QTYPES[q.t], k),
+        temperature,
+        stats,
+        buildMs,
+        encoderMs,
+        headMs,
+        totalMs: performance.now() - qt0,
+      };
+      perQuestion.push(tel);
+      opts.onAnswer?.(qid, answer, tel);
+      // Inference runs on the main thread (see load()), so without a yield the page
+      // never repaints and a six-question batch is indistinguishable from a hang.
+      await new Promise((res) => setTimeout(res, 0));
     }
-    return out;
+
+    return { response: out, aborted, telemetry: { questions: perQuestion, totalMs: performance.now() - t0 } };
   }
 }

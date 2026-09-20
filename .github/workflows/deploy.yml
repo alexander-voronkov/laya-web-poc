@@ -1,0 +1,96 @@
+name: Deploy to laya.voronkov.club
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://laya.voronkov.club
+    steps:
+      - uses: actions/checkout@v4
+
+      # Fail loudly and by name. A deploy job that quietly skips itself when it is not
+      # configured is indistinguishable from a deploy that worked, and the site would
+      # sit on a stale build with a green tick next to it.
+      - name: Check deploy credentials
+        env:
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          missing=""
+          [ -n "$KEY" ]         || missing="$missing DEPLOY_SSH_KEY"
+          [ -n "$HOST" ]        || missing="$missing DEPLOY_HOST"
+          [ -n "$USER" ]        || missing="$missing DEPLOY_USER"
+          [ -n "$KNOWN_HOSTS" ] || missing="$missing DEPLOY_KNOWN_HOSTS"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secrets:$missing — see README, section «Деплой»."
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: Sanity-check the bundle before it replaces the live site
+        run: |
+          set -euo pipefail
+          test -f dist/index.html
+          test -f dist/ort/ort-wasm-simd-threaded.wasm
+          test -f dist/ort/ort-wasm-simd-threaded.mjs
+
+      # Host key is pinned from a secret rather than accepted on first use: rsync runs
+      # with --delete against the live docroot, so a redirected connection would be a
+      # wipe, not just a bad deploy.
+      - name: Configure SSH
+        env:
+          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Upload dist
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER: ${{ secrets.DEPLOY_USER }}
+          # Docroot of the nginx server block for laya.voronkov.club.
+          TARGET: ${{ secrets.DEPLOY_PATH || '/srv/laya-web-poc/site' }}
+        run: |
+          set -euo pipefail
+          rsync -az --delete --checksum \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts" \
+            dist/ "$USER@$HOST:$TARGET/"
+
+      # Deploying and then asserting nothing is how a broken deploy stays green. These
+      # two headers are not cosmetic: without cross-origin isolation the page loses
+      # SharedArrayBuffer, falls back to a single wasm thread and runs ~6x slower.
+      - name: Verify the live site
+        run: |
+          set -euo pipefail
+          headers=$(curl -fsS -D - -o /dev/null https://laya.voronkov.club/)
+          echo "$headers"
+          echo "$headers" | grep -iq '^cross-origin-opener-policy: *same-origin' \
+            || { echo "::error::COOP header missing on the live site"; exit 1; }
+          echo "$headers" | grep -iq '^cross-origin-embedder-policy: *require-corp' \
+            || { echo "::error::COEP header missing or not require-corp on the live site"; exit 1; }
+          curl -fsS https://laya.voronkov.club/ort/ort-wasm-simd-threaded.wasm -o /dev/null \
+            || { echo "::error::ORT wasm runtime is not being served"; exit 1; }

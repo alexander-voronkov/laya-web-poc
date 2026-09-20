@@ -2,7 +2,12 @@
 // Port of rl_common.render_options / serialize_state / build_sequence.
 // Token-for-token equality with the Python original is the contract here; every
 // slice bound and stray space below is load-bearing and verified against golden.json.
-import type { InternalQ, QuestionDef, State } from "./types";
+//
+// laya-web-poc: buildSequence additionally returns `stats`, derived from values it
+// already computes and never read back, so the token ids are unchanged. That claim is
+// not taken on trust -- test/sequence.test.ts replays the 26-question golden dump on
+// every CI run and compares input_ids and marker_pos element by element.
+import type { InternalQ, QuestionDef, SequenceStats, State } from "./types";
 
 export interface Tok {
   encode(text: string, opts: { add_special_tokens: boolean }): number[];
@@ -83,6 +88,8 @@ export function renderOptions(q: InternalQ): string[] {
 export interface Sequence {
   ids: number[];
   markers: number[];
+  /** laya-web-poc: reporting only, never read back. See SequenceStats. */
+  stats: SequenceStats;
 }
 
 /**
@@ -97,17 +104,21 @@ export function buildSequence(
   const opts = renderOptions(q);
   const ins = scrub(String(q.ins));
   let headIds = tok.encode(`${q.t} question: ${ins}`, { add_special_tokens: false });
+  const headTokensFull = headIds.length;
 
-  let optIds = opts.map((o) => [
+  const optIdsFull = opts.map((o) => [
     tok.maskTokenId,
     ...tok.encode(" " + scrub(o), { add_special_tokens: false }).slice(0, 48),
   ]);
+  let optIds = optIdsFull;
   let optBudget = headMaxLen - optIds.reduce((a, o) => a + o.length, 0);
+  let optionsShrunk = false;
   if (optBudget < 16) {
     // too many / too long options: shrink every option text evenly
     const per = Math.max(4, Math.floor((headMaxLen - 16) / Math.max(1, optIds.length)));
     optIds = optIds.map((o) => o.slice(0, per));
     optBudget = headMaxLen - optIds.reduce((a, o) => a + o.length, 0);
+    optionsShrunk = true;
   }
   headIds = headIds.slice(0, Math.max(8, optBudget));
 
@@ -124,5 +135,20 @@ export function buildSequence(
   // Python's st[-0:] is the whole list, not the empty one -- reproduce that, not slice(-0)
   const st = truncateLeft ? (room === 0 ? stAll : stAll.slice(-room)) : stAll.slice(0, room);
   const all = [...ids, ...st, tok.sepTokenId];
-  return { ids: all.slice(0, maxLen), markers: markers.filter((m) => m < maxLen) };
+  const final = all.slice(0, maxLen);
+  return {
+    ids: final,
+    markers: markers.filter((m) => m < maxLen),
+    stats: {
+      headTokens: headIds.length,
+      headTokensFull,
+      optionTokens: optIds.reduce((a, o) => a + o.length, 0),
+      optionTokensFull: optIdsFull.reduce((a, o) => a + o.length, 0),
+      optionsShrunk,
+      stateTokens: stAll.length,
+      stateTokensUsed: st.length,
+      totalTokens: final.length,
+      overflowTokens: all.length - final.length,
+    },
+  };
 }

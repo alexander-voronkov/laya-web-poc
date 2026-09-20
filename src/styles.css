@@ -578,3 +578,149 @@ footer a {
     grid-template-columns: minmax(60px, 110px) 1fr 52px;
   }
 }
+
+/* ---- added in the React port ---- */
+
+.banner {
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  border: 1px solid;
+}
+
+.banner.hard {
+  border-color: #f0c36d;
+  background: #fff8e8;
+  color: #7a4d06;
+}
+
+.banner.soft {
+  border-color: var(--border);
+  background: #fafafc;
+  color: var(--muted);
+}
+
+.q-head-actions {
+  display: flex;
+  gap: 2px;
+}
+
+.q-id-input {
+  width: 92px;
+  margin-left: auto;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--muted);
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+}
+
+.crit-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.q-budget {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.q-advice {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  padding-left: 12px;
+  border-left: 2px solid var(--border);
+}
+
+.radio-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.radio {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.calib-note {
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.5;
+  margin-bottom: 14px;
+  padding-left: 12px;
+  border-left: 2px solid var(--accent-soft);
+}
+
+.breakdown {
+  margin-top: 8px;
+  padding: 10px 12px;
+  background: #fafafc;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.breakdown .m-k {
+  width: 190px;
+}
+
+.breakdown .m-row {
+  font-size: 12.5px;
+  padding: 5px 0;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  margin-top: 16px;
+}
+
+.metrics-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.metrics-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  padding: 6px 10px 6px 0;
+  white-space: nowrap;
+}
+
+.metrics-table td {
+  padding: 6px 10px 6px 0;
+  border-bottom: 1px dashed var(--border);
+  white-space: nowrap;
+}
+
+.metrics-table tr:last-child td {
+  border-bottom: none;
+}
+
+@media (max-width: 640px) {
+  .crit-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .q-id-input {
+    width: 72px;
+  }
+}

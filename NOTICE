@@ -19,15 +19,33 @@ which is in turn a TypeScript port of the reference implementation
     Copyright (c) Nandakishor M / Convai Innovations
     Licensed under the Apache License, Version 2.0
 
-Local modifications are limited to src/laya/session.ts: staged loading (the
-tokenizer/config load separately so the UI can count tokens before the ~524 MB
-of weights arrive), optional per-stage timing callbacks for the metrics panel,
-the wasm thread count kept on the session instance, and a configurable weights
-base URL (src/config.ts). The tokenization and sequence-construction logic
-(src/laya/tokenizer.ts, src/laya/sequence.ts, src/laya/postprocess.ts) is
-deliberately left byte-identical to the upstream port, because token-for-token
-equality with the Python reference (verified: scripts/parity-check.ts, 26/26
-cases) is what makes the probabilities comparable.
+Local modifications:
+
+  src/laya/session.ts   staged loading (the tokenizer/config load separately so
+                        the UI can count tokens before the ~524 MB of weights
+                        arrive); per-stage timing callbacks; the wasm thread
+                        count kept on the instance; per-question telemetry
+                        (timings split between encoder and head, token
+                        accounting); an onAnswer callback so a batch streams
+                        into the page; an AbortSignal honoured between
+                        questions; a configurable weights base URL
+                        (src/config.ts).
+
+  src/laya/sequence.ts  buildSequence additionally returns a `stats` block
+                        describing how the 512-token budget was spent and what
+                        was truncated. It is derived from values the function
+                        already computes and is never read back, so the token
+                        ids are unchanged.
+
+  src/laya/types.ts     the telemetry types the two above return.
+
+src/laya/tokenizer.ts and src/laya/postprocess.ts are unmodified, and the
+tokenization and sequence-construction logic itself is deliberately left
+byte-identical to the upstream port: token-for-token equality with the Python
+reference is what makes the probabilities comparable. That is not taken on
+trust -- test/sequence.test.ts replays the reference implementation's golden
+dump (24 cases, 26 questions, vendored at test/fixtures/parity.json) and
+compares input ids and marker positions element by element on every CI run.
 
 --------------------------------------------------------------------------------
 Model weights

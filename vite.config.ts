@@ -1,4 +1,5 @@
 import { defineConfig, type Plugin } from "vite";
+import react from "@vitejs/plugin-react";
 import { readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -46,7 +47,7 @@ function trimDist(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [crossOriginIsolation(), trimDist()],
+  plugins: [react(), crossOriginIsolation(), trimDist()],
   server: { headers: ISOLATION_HEADERS },
   preview: { headers: ISOLATION_HEADERS },
   optimizeDeps: { exclude: ["onnxruntime-web"] },

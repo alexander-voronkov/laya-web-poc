@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      # Replays the Python golden dump through the TypeScript sequence builder. If this
+      # drifts, the app still renders confident probabilities -- about a different
+      # question -- so it gates everything else.
+      - name: Token parity against the reference implementation
+        run: npm test
+
+      - run: npm run build
+
+      - name: Check the deployable bundle
+        run: |
+          set -euo pipefail
+          test -f dist/index.html
+          # session.ts sets env.wasm.wasmPaths = "/ort/" in production builds; without
+          # these two files ORT hangs at session creation with no error message.
+          test -f dist/ort/ort-wasm-simd-threaded.wasm
+          test -f dist/ort/ort-wasm-simd-threaded.mjs
+          echo "dist: $(du -sh dist | cut -f1)"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist
+          retention-days: 7
