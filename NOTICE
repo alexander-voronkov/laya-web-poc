@@ -19,11 +19,15 @@ which is in turn a TypeScript port of the reference implementation
     Copyright (c) Nandakishor M / Convai Innovations
     Licensed under the Apache License, Version 2.0
 
-Local modifications are marked with `// laya-web-poc:` comments and consist of
-per-question telemetry (timings, token accounting, truncation reporting) and a
-configurable weights base URL. The tokenization and sequence-construction logic
-is deliberately left byte-identical to the upstream port, because token-for-token
-equality with the Python reference is what makes the probabilities comparable.
+Local modifications are limited to src/laya/session.ts: staged loading (the
+tokenizer/config load separately so the UI can count tokens before the ~524 MB
+of weights arrive), optional per-stage timing callbacks for the metrics panel,
+the wasm thread count kept on the session instance, and a configurable weights
+base URL (src/config.ts). The tokenization and sequence-construction logic
+(src/laya/tokenizer.ts, src/laya/sequence.ts, src/laya/postprocess.ts) is
+deliberately left byte-identical to the upstream port, because token-for-token
+equality with the Python reference (verified: scripts/parity-check.ts, 26/26
+cases) is what makes the probabilities comparable.
 
 --------------------------------------------------------------------------------
 Model weights
