@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { NOMINAL_TOTAL_BYTES } from "../config";
 import { jsHeapBytes, type LoadProgress, type LoadStage } from "../laya/session";
 import type { QuestionTelemetry } from "../laya/types";
@@ -58,7 +58,7 @@ export function MetricsPanel({ files, stages, cacheBytes, threads, ready, run, r
   const deviceMemory = (navigator as unknown as { deviceMemory?: number }).deviceMemory;
   const isolated = typeof crossOriginIsolated !== "undefined" && crossOriginIsolated;
 
-  const rows: [string, React.ReactNode][] = [
+  const rows: [string, ReactNode][] = [
     [
       "Загрузка весов",
       ready || loaded
@@ -76,7 +76,7 @@ export function MetricsPanel({ files, stages, cacheBytes, threads, ready, run, r
     ...(isolated ? [] : [[
       "⚠ Изоляция",
       "нет cross-origin isolation — SharedArrayBuffer недоступен, wasm работает в один поток и считает примерно в 6 раз дольше. Проверьте заголовки COOP/COEP.",
-    ] as [string, React.ReactNode]]),
+    ] as [string, ReactNode]]),
     [
       "Время прогона",
       qs.length

@@ -22,10 +22,10 @@ interface Props {
 export function QuestionCard({
   question: q, index, total, problem, advice, budget, onChange, onRemove, onMove,
 }: Props) {
-  const set = <K extends keyof QuestionItem>(k: K, v: QuestionItem[K]) => onChange({ ...q, [k]: v });
+  const set = (patch: Partial<QuestionItem>) => onChange({ ...q, ...patch });
   const isScore = q.type === "score";
   const items: OptionItem[] = isScore ? q.levels : q.options;
-  const setItems = (next: OptionItem[]) => set(isScore ? "levels" : "options", next);
+  const setItems = (next: OptionItem[]) => set(isScore ? { levels: next } : { options: next });
 
   return (
     <div className={`q-card${problem ? " invalid" : ""}`}>
@@ -36,7 +36,7 @@ export function QuestionCard({
           className="q-id-input"
           value={q.id}
           title="Ключ, под которым ответ попадёт в JSON. Модели он не показывается."
-          onChange={(e) => set("id", e.target.value)}
+          onChange={(e) => set({ id: e.target.value })}
         />
         <div className="q-head-actions">
           <button className="icon-btn" title="Выше" disabled={index === 0} onClick={() => onMove(-1)}>↑</button>
@@ -53,7 +53,7 @@ export function QuestionCard({
           type="text"
           value={q.text}
           placeholder={QUESTION_PLACEHOLDER[q.type]}
-          onChange={(e) => set("text", e.target.value)}
+          onChange={(e) => set({ text: e.target.value })}
         />
       </div>
 
@@ -63,7 +63,7 @@ export function QuestionCard({
           type="text"
           value={q.hint}
           placeholder="добавляется к формулировке вопроса"
-          onChange={(e) => set("hint", e.target.value)}
+          onChange={(e) => set({ hint: e.target.value })}
         />
       </div>
 
@@ -75,13 +75,13 @@ export function QuestionCard({
               type="text"
               value={q.criteriaTrue}
               placeholder="да — например: yes, the statement holds"
-              onChange={(e) => set("criteriaTrue", e.target.value)}
+              onChange={(e) => set({ criteriaTrue: e.target.value })}
             />
             <input
               type="text"
               value={q.criteriaFalse}
               placeholder="нет — например: no, it does not hold"
-              onChange={(e) => set("criteriaFalse", e.target.value)}
+              onChange={(e) => set({ criteriaFalse: e.target.value })}
             />
           </div>
           <div className="field-note">

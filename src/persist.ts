@@ -10,6 +10,7 @@ import {
   SEED_TEXT,
   seedQuestions,
   type FramingMode,
+  type OptionItem,
   type QuestionItem,
 } from "./questions";
 
@@ -40,9 +41,18 @@ export function defaultSession(): Session {
 /** Old or hand-edited payloads are discarded rather than migrated: this is a
  *  prototype, and a half-understood shape flowing into the request builder is a
  *  worse outcome than losing a draft. */
-function isSession(v: unknown): v is Session {
+interface RawSession {
+  version: unknown;
+  text: unknown;
+  task: unknown;
+  framing: unknown;
+  questions: unknown;
+  counter: unknown;
+}
+
+function isRawSession(v: unknown): v is RawSession {
   if (typeof v !== "object" || v === null) return false;
-  const s = v as Partial<Session>;
+  const s = v as RawSession;
   return (
     s.version === VERSION &&
     typeof s.text === "string" &&
@@ -53,24 +63,49 @@ function isSession(v: unknown): v is Session {
   );
 }
 
+const str = (v: unknown, fallback = "") => (typeof v === "string" ? v : fallback);
+
+function toOptions(v: unknown): OptionItem[] {
+  if (!Array.isArray(v)) return [];
+  return v.map((o) => {
+    const r = (o ?? {}) as Record<string, unknown>;
+    return { label: str(r.label), description: str(r.description) };
+  });
+}
+
+/** Field by field, never by spread. A saved question written before a field existed
+ *  arrives without it, and `{...defaults, ...saved}` cannot fix that: the saved object
+ *  has the key absent, not undefined, only when the writer omitted it -- and TypeScript
+ *  types it as present either way, so the defaults are dead code that typechecks. The
+ *  failure it would cause is an `undefined.trim()` inside the request builder. */
+function toQuestion(v: unknown, index: number): QuestionItem {
+  const r = (v ?? {}) as Record<string, unknown>;
+  const type = r.type === "choice" || r.type === "score" ? r.type : "noul";
+  return {
+    id: str(r.id) || `q${index + 1}`,
+    type,
+    text: str(r.text),
+    hint: str(r.hint),
+    criteriaTrue: str(r.criteriaTrue),
+    criteriaFalse: str(r.criteriaFalse),
+    options: toOptions(r.options),
+    levels: toOptions(r.levels),
+  };
+}
+
 export function loadSession(): Session {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return defaultSession();
     const parsed: unknown = JSON.parse(raw);
-    if (!isSession(parsed)) return defaultSession();
-    // Fields added after a session was saved would otherwise arrive as undefined and
-    // reach .trim() in the request builder.
+    if (!isRawSession(parsed)) return defaultSession();
     return {
-      ...parsed,
-      questions: parsed.questions.map((q) => ({
-        hint: "",
-        criteriaTrue: "",
-        criteriaFalse: "",
-        options: [],
-        levels: [],
-        ...q,
-      })),
+      version: VERSION,
+      text: parsed.text as string,
+      task: parsed.task as string,
+      framing: parsed.framing as FramingMode,
+      counter: parsed.counter as number,
+      questions: (parsed.questions as unknown[]).map(toQuestion),
     };
   } catch {
     return defaultSession();
