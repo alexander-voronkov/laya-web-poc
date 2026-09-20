@@ -29,9 +29,9 @@ export interface QuestionItem {
 }
 
 export const TYPE_LABELS: Record<QuestionType, string> = {
-  noul: "Бинарный (0–100)",
-  choice: "Выбор из списка",
-  score: "Шкала (ожидание по уровням)",
+  noul: "Binary (0–100)",
+  choice: "Pick one",
+  score: "Ordered scale (expected level)",
 };
 
 /** Where the task prompt is spliced in.
@@ -44,9 +44,9 @@ export const TYPE_LABELS: Record<QuestionType, string> = {
 export type FramingMode = "instructions" | "state" | "both";
 
 export const FRAMING_LABELS: Record<FramingMode, string> = {
-  instructions: "в формулировку каждого вопроса",
-  state: "в начало текста (state)",
-  both: "и туда, и туда",
+  instructions: "into every question's wording",
+  state: "in front of the text (state)",
+  both: "both places",
 };
 
 let uidSeq = 0;
@@ -83,13 +83,13 @@ function sentences(parts: string[]): string {
     .join(" ");
 }
 
-/** instructions = [<задача>] <вопрос> <уточнение>. */
+/** instructions = [<task>] <question> <hint>. */
 export function buildInstructions(task: string, q: QuestionItem, mode: FramingMode): string {
   const framing = mode === "instructions" || mode === "both" ? task : "";
   return sentences([framing, q.text, q.hint]);
 }
 
-/** state = [<задача>] + текст. A visible separator, not a JSON wrapper: the reference
+/** state = [<task>] + text. A visible separator, not a JSON wrapper: the reference
  *  serializer would escape the whole thing and spend tokens on punctuation. */
 export function buildState(task: string, text: string, mode: FramingMode): string {
   const framing = mode === "state" || mode === "both" ? task.trim() : "";
@@ -163,30 +163,29 @@ export function validateQuestions(qs: QuestionItem[]): ValidationIssue[] {
   const seen = new Set<string>();
   for (const q of qs) {
     // An empty id would become the key "" in the request and in the exported answers.
-    if (!q.id.trim()) out.push({ uid: q.uid, problem: "пустой ключ вопроса" });
-    else if (seen.has(q.id)) out.push({ uid: q.uid, problem: "ключ вопроса повторяется" });
+    if (!q.id.trim()) out.push({ uid: q.uid, problem: "the question key is empty" });
+    else if (seen.has(q.id)) out.push({ uid: q.uid, problem: "the question key is used twice" });
     seen.add(q.id);
-    if (!q.text.trim()) out.push({ uid: q.uid, problem: "пустой текст вопроса" });
+    if (!q.text.trim()) out.push({ uid: q.uid, problem: "the question text is empty" });
     if (q.type === "choice" || q.type === "score") {
       const items = q.type === "score" ? q.levels : q.options;
-      const noun = q.type === "score" ? "уровня" : "варианта";
+      const noun = q.type === "score" ? "levels" : "options";
       const labels = scoredItems(q).map((o) => o.label);
-      if (labels.length < 2) out.push({ uid: q.uid, problem: `нужно минимум 2 непустых ${noun}` });
+      if (labels.length < 2) out.push({ uid: q.uid, problem: `at least 2 labelled ${noun} are needed` });
       else if (new Set(labels).size !== labels.length)
-        out.push({ uid: q.uid, problem: q.type === "score" ? "уровни повторяются" : "варианты повторяются" });
+        out.push({ uid: q.uid, problem: `duplicate ${noun}` });
       // Blank rows are dropped from the request rather than sent as empty options, so
       // this is not a crash -- but a row the user typed a description into and never
       // labelled would vanish without a word, which is the wrong kind of quiet.
       if (labels.length !== items.length) {
         const blanks = items.length - labels.length;
-        const plural = q.type === "score" ? "уровней без метки" : "вариантов без метки";
         out.push({
           uid: q.uid,
-          problem: `${blanks} ${plural} — они не уйдут модели; заполните или удалите`,
+          problem: `${blanks} unlabelled ${blanks === 1 ? noun.slice(0, -1) : noun} — not sent to the model; label or remove`,
         });
       }
       // criteria is a dict keyed by label, and the documented ceiling is 255
-      if (labels.length > 255) out.push({ uid: q.uid, problem: "больше 255 вариантов" });
+      if (labels.length > 255) out.push({ uid: q.uid, problem: "more than 255 options" });
     }
   }
   return out;
@@ -232,10 +231,10 @@ export function advice(task: string, text: string, qs: QuestionItem[]): Advice[]
       uid: null,
       level: "hard",
       text:
-        "Найдены нелатинские символы. Этот чекпойнт обучен только на английском и на других " +
-        "языках остаётся уверенным, будучи неправым (0.000 точности при 0.952 средней уверенности " +
-        "на кхмерском) — отфильтровать такие ответы по confidence невозможно. Мультиязычная Laya " +
-        "существует, но в ONNX/q8 для браузера её пока никто не выложил.",
+        "Non-Latin characters found. This checkpoint was trained on English only, and on other " +
+        "languages it stays confident while being wrong — 0.000 accuracy at 0.952 mean confidence " +
+        "on Khmer — so a confidence threshold cannot filter those answers out. A multilingual Laya " +
+        "exists, but nobody has published an ONNX/q8 build of it for the browser.",
     });
   }
 
@@ -245,29 +244,29 @@ export function advice(task: string, text: string, qs: QuestionItem[]): Advice[]
         uid: q.uid,
         level: "soft",
         text:
-          `${countOptions(q)} вариантов: температура бакета choice:11+ равна 0.1006, распределение ` +
-          "сжимается почти в one-hot, и на 192 токена головы остаётся по несколько токенов на метку.",
+          `${countOptions(q)} options: the choice:11+ temperature is 0.1006, which sharpens the ` +
+          "distribution close to one-hot, and 192 head tokens leave only a few tokens per label.",
       });
     }
     if (q.type === "score") {
       out.push({
         uid: q.uid,
         level: "soft",
-        text: "score — самый слабый примитив этого чекпойнта (SST-5 0.372). Где хватает «да/нет», бинарный вопрос разделяет лучше.",
+        text: "score is the weakest primitive on this checkpoint (SST-5 0.372). Where a yes/no question will do, it separates better.",
       });
     }
     if (q.type === "noul" && (!q.criteriaTrue.trim() || !q.criteriaFalse.trim())) {
       out.push({
         uid: q.uid,
         level: "soft",
-        text: "не заданы описания «да» и «нет» — они стоят несколько токенов и заметно повышают разделимость.",
+        text: "no descriptions for yes and no — they cost a handful of tokens and measurably sharpen the answer.",
       });
     }
     if (q.text.trim().length > 80 && /\b(and|or)\b/i.test(q.text)) {
       out.push({
         uid: q.uid,
         level: "soft",
-        text: "похоже на составной вопрос. Один предикат на вопрос: составная формулировка сглаживает шкалу — спросите отдельно и соедините результаты в коде.",
+        text: "looks like a compound question. One predicate per question: a compound wording flattens the distribution — ask separately and combine the results in code.",
       });
     }
   }

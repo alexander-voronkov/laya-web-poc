@@ -66,20 +66,20 @@ describe("blank rows never reach the model", () => {
       ],
     });
     const problems = validateQuestions([item]).map((i) => i.problem);
-    expect(problems.some((p) => p.includes("без метки"))).toBe(true);
+    expect(problems.some((p) => p.includes("unlabelled"))).toBe(true);
   });
 });
 
 describe("validation catches keys that would corrupt the response", () => {
   it("rejects an empty key", () => {
     const problems = validateQuestions([q({ type: "noul", id: "" })]).map((i) => i.problem);
-    expect(problems).toContain("пустой ключ вопроса");
+    expect(problems).toContain("the question key is empty");
   });
 
   it("rejects duplicate keys, which would collapse in the request object", () => {
     const items = [q({ type: "noul", id: "same" }), q({ type: "noul", id: "same" })];
     expect(Object.keys(toRequest("", items, "instructions"))).toHaveLength(1);
-    expect(validateQuestions(items).map((i) => i.problem)).toContain("ключ вопроса повторяется");
+    expect(validateQuestions(items).map((i) => i.problem)).toContain("the question key is used twice");
   });
 
   it("reports against the stable uid, not the editable key", () => {

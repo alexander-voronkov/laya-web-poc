@@ -15,10 +15,10 @@ export function LoadOverlay({ phase, error, files, onRetry }: Props) {
   return (
     <div id="overlay">
       <div className="overlay-card">
-        <h3>Загрузка модели</h3>
+        <h3>Loading the model</h3>
         <p className="muted">
-          ~{mb(NOMINAL_TOTAL_BYTES)} МБ, только при первом открытии: файлы кэшируются браузером,
-          в следующий раз — почти мгновенно. Всё считается локально, текст никуда не уходит.
+          ~{mb(NOMINAL_TOTAL_BYTES)} MB, on the first visit only: the files are cached by the browser,
+          so next time is almost instant. Everything runs locally; the text never leaves the machine.
         </p>
         <div id="ov-files">
           {files.map((f) => (
@@ -26,7 +26,7 @@ export function LoadOverlay({ phase, error, files, onRetry }: Props) {
               <div className="ov-file-head">
                 <span className="ov-name">{f.file}</span>
                 <span className="ov-size">
-                  {f.total ? `${mb(f.loaded)} / ${mb(f.total)} МБ` : `${mb(f.loaded)} МБ`}
+                  {f.total ? `${mb(f.loaded)} / ${mb(f.total)} MB` : `${mb(f.loaded)} MB`}
                 </span>
               </div>
               {/* Without Content-Length (chunked or compressed responses) there is no
@@ -43,12 +43,12 @@ export function LoadOverlay({ phase, error, files, onRetry }: Props) {
         </div>
         <div id="ov-status" className={error ? "error" : "muted"}>
           {error
-            ? `Ошибка загрузки: ${error}`
+            ? `Load failed: ${error}`
             : phase === "core"
-              ? "загрузка токенизатора и конфига…"
-              : "загрузка весов модели…"}
+              ? "loading the tokenizer and config…"
+              : "downloading the model weights…"}
         </div>
-        {error && <button className="btn" onClick={onRetry}>Повторить</button>}
+        {error && <button className="btn" onClick={onRetry}>Retry</button>}
       </div>
     </div>
   );

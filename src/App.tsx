@@ -110,11 +110,11 @@ export default function App() {
     const s = laya.session;
     if (!s || running) return;
     if (issues.length) {
-      setStatus({ text: `исправьте: ${issues.map((i) => i.problem).join("; ")}`, error: true });
+      setStatus({ text: `fix first: ${issues.map((i) => i.problem).join("; ")}`, error: true });
       return;
     }
     if (broken.length) {
-      setStatus({ text: "есть вопросы, варианты которых не помещаются в бюджет головы", error: true });
+      setStatus({ text: "some questions have options that do not fit the head budget", error: true });
       return;
     }
 
@@ -135,7 +135,7 @@ export default function App() {
     setRunning(true);
     setLive([]);
     setResult(null);
-    setStatus({ text: `инференс: 0 из ${questions.length}…` });
+    setStatus({ text: `running: 0 of ${questions.length}…` });
 
     try {
       const run = await s.systemOne(snapshot.state, snapshot.request, {
@@ -147,20 +147,20 @@ export default function App() {
           const index = order.get(qid) ?? 0;
           landed.push({ question: questions[index], index, answer, telemetry });
           setLive([...landed]);
-          setStatus({ text: `инференс: ${landed.length} из ${questions.length}…` });
+          setStatus({ text: `running: ${landed.length} of ${questions.length}…` });
         },
       });
       setResult({ ...snapshot, landed, telemetry: run.telemetry, aborted: run.aborted });
       setStatus({
         text: run.aborted
-          ? `остановлено: ${landed.length} из ${questions.length} за ${sec(run.telemetry.totalMs)}`
-          : `готово за ${sec(run.telemetry.totalMs)}`,
+          ? `stopped: ${landed.length} of ${questions.length} in ${sec(run.telemetry.totalMs)}`
+          : `done in ${sec(run.telemetry.totalMs)}`,
       });
     } catch (e) {
       // Whatever landed before the throw stays on screen, but it is not a run: no
       // result record means no metrics table and no export, so a partial screen
       // cannot be mistaken for a finished one.
-      setStatus({ text: `ошибка на вопросе ${landed.length + 1}: ${String((e as Error)?.message ?? e)}`, error: true });
+      setStatus({ text: `failed on question ${landed.length + 1}: ${String((e as Error)?.message ?? e)}`, error: true });
     } finally {
       setRunning(false);
       abortRef.current = null;
@@ -177,8 +177,8 @@ export default function App() {
         maxLen: laya.core?.cfg.max_len ?? null,
         headMaxLen: laya.core?.cfg.head_max_len ?? null,
         calibration:
-          "температуры подобраны автором на fp32 и после квантования не перекалибровывались; " +
-          "вероятности стоит читать как порядок, а не как абсолютную частоту",
+          "temperatures were fitted by the original author on the fp32 model and not refitted " +
+          "after quantisation; read the probabilities as an ordering, not as frequencies",
         englishOnly: true,
       },
       input: result.input,
@@ -222,9 +222,9 @@ export default function App() {
         <header>
           <h1>Laya · web PoC</h1>
           <p className="tagline">
-            Калиброванные вероятности по вашим вопросам. Модель (ModernBERT-large, q8) считается
-            целиком в браузере через onnxruntime-web/wasm — текст не покидает компьютер, сервера у
-            приложения нет, черновик хранится в localStorage.
+            Calibrated probabilities for your own questions. The model (ModernBERT-large, q8) runs
+            entirely in the browser on onnxruntime-web/wasm — the text never leaves your machine,
+            there is no backend, and the draft is kept in localStorage.
           </p>
         </header>
 
@@ -232,57 +232,58 @@ export default function App() {
           {hardAdvice.map((a, i) => <div className="banner hard" key={i}>{a.text}</div>)}
           {saveFailed && (
             <div className="banner hard">
-              Черновик не сохраняется: браузер отказал в записи в localStorage (приватный режим или
-              исчерпана квота). Всё на странице работает, но после перезагрузки вернётся пример.
+              The draft is not being saved: the browser refused to write to localStorage (private
+              mode, or the quota is full). Everything here still works, but a reload will bring back
+              the example.
             </div>
           )}
           {recovered && (
             <div className="banner soft">
-              Предыдущий черновик не удалось прочитать, и он отложен в{" "}
-              <code>laya-web-poc/session.bak</code> — его можно достать из DevTools → Application →
-              Local Storage. Сейчас загружен пример.
+              The previous draft could not be read and was set aside under{" "}
+              <code>laya-web-poc/session.bak</code> — you can recover it from DevTools → Application →
+              Local Storage. The example is loaded instead.
             </div>
           )}
 
           <section className="card">
-            <h2>1 · Текст</h2>
-            <label htmlFor="state-text">Текст для анализа (state)</label>
+            <h2>1 · Text</h2>
+            <label htmlFor="state-text">The text to analyse (state)</label>
             <textarea
               id="state-text"
               rows={10}
               value={text}
-              placeholder="Вставьте текст…"
+              placeholder="Paste the text…"
               onChange={(e) => patch({ text: e.target.value })}
             />
             <div className="note-row">
               <span className="muted">
                 {budget === null
                   ? budgetError
-                    ? `не удалось посчитать бюджет: ${budgetError}`
-                    : "токены текста: —"
-                  : `токены текста: ${budget.stateTokens} · до модели дойдёт ${budget.worstStateUsed}` +
+                    ? `could not compute the budget: ${budgetError}`
+                    : "text tokens: —"
+                  : `text tokens: ${budget.stateTokens} · ${budget.worstStateUsed} reach the model` +
                     (!budget.anyTruncated && headroom !== null
-                      ? ` (в самой длинной последовательности остаётся ${headroom} из ${budget.maxLen})`
+                      ? ` (${headroom} of ${budget.maxLen} spare in the longest sequence)`
                       : "")}
               </span>
               {budget?.anyTruncated && (
-                <span className="warn">хвост текста обрезается — в каком вопросе и насколько, видно в его карточке</span>
+                <span className="warn">the tail of the text is being cut — which question, and by how much, is on its card</span>
               )}
             </div>
           </section>
 
           <section className="card">
-            <h2>2 · Задача</h2>
-            <label htmlFor="task-text">Как интерпретировать текст</label>
+            <h2>2 · Task</h2>
+            <label htmlFor="task-text">How to read the text</label>
             <textarea
               id="task-text"
               rows={2}
               value={task}
-              placeholder="например: Read the text as a literary critic"
+              placeholder="e.g. Read the text as a literary critic"
               onChange={(e) => patch({ task: e.target.value })}
             />
             <div className="field">
-              <label>Куда подставлять задачу</label>
+              <label>Where the task goes</label>
               <div className="radio-row">
                 {(Object.keys(FRAMING_LABELS) as FramingMode[]).map((m) => (
                   <label key={m} className="radio">
@@ -292,16 +293,16 @@ export default function App() {
                 ))}
               </div>
               <div className="field-note">
-                Формулировка вопроса делит {budget?.headMaxLen ?? 192} токенов с вариантами ответа, и
-                при нехватке обрезается <b>с конца</b> — то есть длинная задача впереди съедает сам
-                вопрос. В тексте задача занимает место из общего бюджета, но вопрос не трогает.
+                The question wording shares {budget?.headMaxLen ?? 192} tokens with the options, and
+                on overflow it is cut <b>from the end</b> — so a long task in front eats the question
+                itself. In the text it draws on the shared budget instead, and leaves the question alone.
               </div>
             </div>
           </section>
 
           <section className="card">
-            <h2>3 · Вопросы</h2>
-            {questions.length === 0 && <div className="empty-note">Вопросов пока нет — добавьте первый ниже.</div>}
+            <h2>3 · Questions</h2>
+            {questions.length === 0 && <div className="empty-note">No questions yet — add the first one below.</div>}
             {questions.map((q, i) => (
               <QuestionCard
                 key={q.uid}
@@ -330,7 +331,7 @@ export default function App() {
                 className="link-btn"
                 onClick={() => { clearSession(); setSession(defaultSession()); setLive([]); setResult(null); }}
               >
-                сбросить к примеру
+                reset to the example
               </button>
             </div>
           </section>
@@ -341,31 +342,31 @@ export default function App() {
               disabled={running || laya.phase !== "ready" || !questions.length || blockers > 0}
               onClick={doRun}
             >
-              Получить ответы
+              Get answers
             </button>
-            {running && <button className="btn" onClick={() => abortRef.current?.abort()}>Остановить</button>}
+            {running && <button className="btn" onClick={() => abortRef.current?.abort()}>Stop</button>}
             <span className={`muted${status?.error ? " error" : ""}`}>
               {status?.text ??
                 (laya.phase !== "ready"
-                  ? "модель загружается…"
+                  ? "the model is loading…"
                   : blockers > 0
-                    ? `${blockers} вопр. требуют правки — см. карточки выше`
-                    : "модель готова")}
+                    ? `${blockers} question${blockers === 1 ? "" : "s"} need fixing — see the cards above`
+                    : "the model is ready")}
             </span>
           </section>
 
           {(shown.length > 0 || running) && (
             <section className="card">
               <h2>
-                Ответы
+                Answers
                 {result?.aborted && (
-                  <span className="ans-partial"> · прогон остановлен: {result.landed.length} из {result.requested}</span>
+                  <span className="ans-partial"> · run stopped: {result.landed.length} of {result.requested}</span>
                 )}
               </h2>
               <div className="calib-note">
-                Температуры откалиброваны автором на fp32-модели и после квантования не
-                перекалибровывались. Сравнивать вероятности между собой можно; читать их как
-                абсолютную частоту — нет, пока они не перекалиброваны на ваших размеченных данных.
+                The temperatures were fitted by the original author on the fp32 model and were not
+                refitted after quantisation. Comparing these probabilities against each other is fine;
+                reading them as frequencies is not, until they are refitted on your own labelled data.
               </div>
               {shown.map((l) => (
                 <AnswerCard key={l.question.uid} question={l.question} index={l.index} answer={l.answer} telemetry={l.telemetry} />
@@ -374,7 +375,7 @@ export default function App() {
           )}
 
           <section className="card">
-            <h2>Метрики</h2>
+            <h2>Metrics</h2>
             <MetricsPanel
               files={laya.files}
               stages={laya.stages}
@@ -384,16 +385,16 @@ export default function App() {
               run={result ? { ...result.telemetry, aborted: result.aborted, requested: result.requested } : null}
             />
             <div className="metrics-actions">
-              <button className="btn" disabled={!result} onClick={exportJson}>Экспорт JSON прогона</button>
+              <button className="btn" disabled={!result} onClick={exportJson}>Export the run as JSON</button>
             </div>
           </section>
         </main>
 
         <footer>
           <p>
-            Прототип на базе <a href="https://github.com/nvkudva/laya-web" target="_blank" rel="noreferrer">nvkudva/laya-web</a>{" "}
-            (порт рантайма) и весов <a href="https://huggingface.co/nvkudva/laya-web-q8" target="_blank" rel="noreferrer">nvkudva/laya-web-q8</a>{" "}
-            · базовая модель <a href="https://huggingface.co/convaiinnovations/laya" target="_blank" rel="noreferrer">convaiinnovations/laya</a>{" "}
+            Built on <a href="https://github.com/nvkudva/laya-web" target="_blank" rel="noreferrer">nvkudva/laya-web</a>{" "}
+            (the runtime port) and the weights <a href="https://huggingface.co/nvkudva/laya-web-q8" target="_blank" rel="noreferrer">nvkudva/laya-web-q8</a>{" "}
+            · base model <a href="https://huggingface.co/convaiinnovations/laya" target="_blank" rel="noreferrer">convaiinnovations/laya</a>{" "}
             · Apache-2.0
           </p>
         </footer>
@@ -413,7 +414,7 @@ function AddQuestion({ onAdd }: { onAdd: (t: QuestionType) => void }) {
           <option key={t} value={t}>{TYPE_LABELS[t]}</option>
         ))}
       </select>
-      <button className="btn" onClick={() => onAdd(type)}>Добавить вопрос</button>
+      <button className="btn" onClick={() => onAdd(type)}>Add question</button>
     </>
   );
 }
