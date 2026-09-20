@@ -169,3 +169,16 @@ jobs:
           }
           check_runtime ort-wasm-simd-threaded.wasm 'application/wasm'
           check_runtime ort-wasm-simd-threaded.js '(application|text)/javascript'
+
+          # And the negative case, which is the one that bit. /ort/ and /assets/ are
+          # configured with `try_files $uri =404` precisely so a missing build artefact
+          # fails instead of being disguised as the SPA shell; if that ever reverts, the
+          # checks above go back to being able to pass on a file that is not there.
+          for missing in /ort/definitely-not-here.wasm /assets/definitely-not-here.js; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "$SITE$missing")
+            [ "$code" = "404" ] || {
+              echo "::error::$missing returned $code, expected 404 — the SPA fallback is swallowing missing build artefacts again (see deploy/nginx-laya.voronkov.club.conf)"
+              exit 1
+            }
+          done
+          echo "missing build artefacts correctly 404"
