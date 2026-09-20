@@ -150,17 +150,22 @@ jobs:
           #
           # Content type, not status: nginx answers `try_files $uri $uri/ /index.html`,
           # so a *missing* file returns 200 with the HTML page, which `curl -f` accepts.
-          for probe in \
-            "ort-wasm-simd-threaded.wasm|application/wasm" \
-            "ort-wasm-simd-threaded.js|(application|text)/javascript"; do
-            file=${probe%%|*}; want=${probe##*|}
+          # Two arguments, not one packed string: the previous form split a "file|regex"
+          # pair on the last `|`, which lives *inside* the alternation
+          # `(application|text)`, so it compared against `text)/javascript` and failed a
+          # correct deploy. Cheap to get wrong, and the error message is what caught it.
+          check_runtime() {
+            file=$1; want=$2
             h=$(curl -fsS -D - -o /dev/null "$SITE/ort/$file" | tr -d '\r')
             echo "$h" | grep -iqE "^content-type:[[:space:]]*$want" || {
-              echo "::error::/ort/$file is not served as $want — got: $(echo "$h" | grep -i '^content-type:' || echo 'no content-type')"
-              exit 1
+              echo "::error::/ort/$file is not served as $want — got: $(echo "$h" | grep -i '^content-type:' || echo 'no content-type header)')"
+              return 1
             }
             echo "$h" | grep -iqE '^cross-origin-embedder-policy:[[:space:]]*require-corp[[:space:]]*$' || {
               echo "::error::COEP missing on /ort/$file — the runtime would not load isolated"
-              exit 1
+              return 1
             }
-          done
+            echo "/ort/$file ok"
+          }
+          check_runtime ort-wasm-simd-threaded.wasm 'application/wasm'
+          check_runtime ort-wasm-simd-threaded.js '(application|text)/javascript'
