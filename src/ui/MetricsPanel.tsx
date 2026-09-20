@@ -3,6 +3,7 @@ import { NOMINAL_TOTAL_BYTES } from "../config";
 import { jsHeapBytes, type CacheState, type LayaSession, type LoadProgress, type LoadStage } from "../laya/session";
 import type { QuestionTelemetry } from "../laya/types";
 import { mb, ms, sec } from "../format";
+import { MemoryProbe } from "./MemoryProbe";
 
 interface RunSummary {
   questions: QuestionTelemetry[];
@@ -117,6 +118,7 @@ export function MetricsPanel({ files, stages, cache, session, ready, run }: Prop
         ? `${mb(heap)} МБ — это куча JavaScript; линейная память wasm, где лежат веса, сюда не входит и браузером не раскрывается`
         : "performance.memory недоступен в этом браузере (есть только в Chromium)",
     ],
+    ["Память процесса (вкл. wasm)", <MemoryProbe key="mem" />],
     [
       "Память устройства",
       deviceMemory ? `${deviceMemory} ГБ (округление браузера)` : "navigator.deviceMemory недоступен",
