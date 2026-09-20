@@ -42,9 +42,20 @@ jobs:
             echo "::error::Missing repository secrets:$missing — see README, section «Deploy»."
             exit 1
           fi
-          # rsync runs with --delete against this path. It is not a secret worth hiding
-          # from the log, and a typo in it is exactly what this line is here to reveal.
-          echo "deploy target: $USER@$HOST:$TARGET"
+          # rsync resolves a destination without a leading slash against the login
+          # user's home directory, so a mangled path does not fail as "wrong path" --
+          # it quietly tries to create a new tree under $HOME while the real docroot
+          # keeps serving the old build. This is not hypothetical: setting the secret
+          # from Git Bash silently rewrote "/srv/..." into a Windows path, and the only
+          # symptom was rsync trying to mkdir inside /home.
+          case "$TARGET" in
+            /*) ;;
+            *) echo "::error::DEPLOY_PATH must be an absolute path; got a relative one, which rsync would resolve under the login user's home directory."; exit 1 ;;
+          esac
+          # GitHub masks secret values in the log, so this prints the shape rather than
+          # the value: enough to see a path that lost its leading slash or gained a
+          # drive letter, without publishing the docroot.
+          echo "deploy target: user@host:${TARGET%%/*}/... (${#TARGET} chars, absolute)"
 
       - uses: actions/setup-node@v4
         with:
