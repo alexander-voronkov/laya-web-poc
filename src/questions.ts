@@ -231,10 +231,14 @@ export function advice(task: string, text: string, qs: QuestionItem[]): Advice[]
       uid: null,
       level: "hard",
       text:
-        "Non-Latin characters found. This checkpoint was trained on English only, and on other " +
-        "languages it stays confident while being wrong — 0.000 accuracy at 0.952 mean confidence " +
-        "on Khmer — so a confidence threshold cannot filter those answers out. A multilingual Laya " +
-        "exists, but nobody has published an ONNX/q8 build of it for the browser.",
+        "Non-Latin script found. Laya as a family covers 100+ languages — but that is the " +
+        "multilingual checkpoint (mmBERT-base), and the one running here is the English root " +
+        "(ModernBERT-large), which its own card sums up as \"English only on root\". It is not " +
+        "useless elsewhere: it clears 3x random in 23 of 51 languages. What it does badly is " +
+        "non-Latin script specifically, and it does it while staying confident — 0.000 accuracy " +
+        "at 0.952 mean confidence on Khmer — so a confidence threshold cannot filter these " +
+        "answers out. Cyrillic is in that bucket. The multilingual checkpoint also reads 1024 " +
+        "tokens instead of 512.",
     });
   }
 
