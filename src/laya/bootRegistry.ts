@@ -77,7 +77,7 @@ export class BootRegistry<T> {
       // behind a rejection every later caller would replay instead of retrying.
       const settle = (ok: boolean) => {
         created.settled = true;
-        if (!ok && this.entries.get(key) === created) this.entries.delete(key);
+        if (this.entries.get(key) === created) this.entries.delete(key); // MUTANT
       };
       created.promise.then(() => settle(true), () => settle(false));
       this.entries.set(key, created);
@@ -90,14 +90,14 @@ export class BootRegistry<T> {
     return {
       promise: held.promise,
       release: () => {
-        if (released) return;
+        // MUTANT: double-release guard removed
         released = true;
         held.watchers--;
         this.timer(() => {
           // Every condition is re-read: the point of the delay is that all of them can
           // change inside it. A finished load stays, a re-acquired one stays, and a
           // load that was already replaced is not this handle's to abandon.
-          if (false) return; // MUTANT
+          if (held.settled || held.watchers > 0) return;
           if (this.entries.get(key) !== held) return;
           this.entries.delete(key);
           this.onAbandon?.(key);
