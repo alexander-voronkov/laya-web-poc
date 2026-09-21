@@ -106,6 +106,23 @@ jobs:
         working-directory: pipeline/export
         run: python verify_onnx.py --encoder out/encoder_q8.onnx --head out/head_q8.onnx --gate
 
+      # Whether the result can answer several questions in one pass is a property of
+      # the export, and two of the three builds this project has used got it wrong in
+      # different ways -- one refusing a batch outright, one accepting it and drifting
+      # 17 points. Neither was noticed until somebody ran the graphs, and one of them
+      # had already shipped. So every export answers the question about itself, here,
+      # before anyone has to guess in models.ts.
+      #
+      # Deliberately not a gate: a build that cannot batch is still a good build, it
+      # just runs one question at a time. The finding goes in the log and into
+      # batchSafe.
+      - name: Can it batch?
+        continue-on-error: true
+        working-directory: pipeline/export
+        run: |
+          cp $GITHUB_WORKSPACE/export/batch_probe.py .
+          python batch_probe.py --encoder out/encoder_q8.onnx --head out/head_q8.onnx
+
       - name: Assemble what the app fetches
         working-directory: pipeline/export
         run: |
