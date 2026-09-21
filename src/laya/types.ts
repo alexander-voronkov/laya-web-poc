@@ -76,10 +76,6 @@ export interface QuestionTelemetry {
   stats: SequenceStats;
   /** Tokenizing and assembling the sequence. */
   buildMs: number;
-  /** How many questions shared the forward pass these timings describe. Laya answers
-   *  a whole batch in one pass, so encoderMs and headMs belong to the batch; splitting
-   *  them per question would invent a number nobody measured. */
-  batchSize: number;
   /** The 28-layer ModernBERT encoder pass -- this is where the time goes. */
   encoderMs: number;
   /** The decision head. */

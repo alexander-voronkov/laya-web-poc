@@ -57,13 +57,7 @@ export function MetricsPanel({ files, stages, cache, session, ready, run }: Prop
   const qs = run?.questions ?? [];
   const inputTokens = qs.reduce((a, q) => a + q.stats.totalTokens, 0);
   const scored = qs.reduce((a, q) => a + q.options, 0);
-  // Divided by batchSize on purpose: every question in a batch reports the same
-  // forward-pass time, so a plain sum counts one pass once per question and a batch of
-  // three would claim three times the compute that happened.
-  const encoderMs = qs.reduce((a, q) => a + q.encoderMs / q.batchSize, 0);
-  // Each batch contributes batchSize rows of 1/batchSize, so this is exactly the
-  // number of forward passes, without needing to identify the groups.
-  const batches = Math.round(qs.reduce((a, q) => a + 1 / q.batchSize, 0));
+  const encoderMs = qs.reduce((a, q) => a + q.encoderMs, 0);
   const droppedTokens = qs.reduce((a, q) => a + (q.stats.stateTokens - q.stats.stateTokensUsed), 0);
   const totalMs = run?.totalMs ?? 0;
 
@@ -108,12 +102,6 @@ export function MetricsPanel({ files, stages, cache, session, ready, run }: Prop
       "Tokens",
       qs.length
         ? `${inputTokens} in · ${scored} options scored${droppedTokens ? ` · ${droppedTokens} dropped from the text` : ""} · 0 generated (the model does not generate)`
-        : "—",
-    ],
-    [
-      "Forward passes",
-      qs.length
-        ? `${batches} for ${qs.length} question${qs.length === 1 ? "" : "s"}${batches < qs.length ? ` — batched, ${(qs.length / batches).toFixed(1)} per pass` : " — one per question"}`
         : "—",
     ],
     [
@@ -194,7 +182,7 @@ function PerQuestionTable({ qs }: { qs: QuestionTelemetry[] }) {
         <thead>
           <tr>
             <th>question</th><th>type</th><th>opts</th><th>tokens</th>
-            <th>text</th><th>batch</th><th>encoder</th><th>head</th><th>temperature</th>
+            <th>text</th><th>encoder</th><th>head</th><th>total</th><th>temperature</th>
           </tr>
         </thead>
         <tbody>
@@ -208,9 +196,9 @@ function PerQuestionTable({ qs }: { qs: QuestionTelemetry[] }) {
                 {q.stats.stateTokensUsed}
                 {q.stats.stateTokensUsed < q.stats.stateTokens && `/${q.stats.stateTokens}`}
               </td>
-              <td>{q.batchSize}</td>
               <td>{ms(q.encoderMs)}</td>
               <td>{ms(q.headMs)}</td>
+              <td>{ms(q.totalMs)}</td>
               <td>{q.temperature.toFixed(4)} <span className="muted">{q.temperatureBucket}</span></td>
             </tr>
           ))}

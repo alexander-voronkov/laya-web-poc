@@ -24,22 +24,6 @@ import { sec } from "./format";
 
 const BUDGETS = [512, 1024, 2048, 4096, 8192];
 
-/** `?batchTokens=N` forces the batching ceiling, and `?batchTokens=1` puts every
- *  question in its own forward pass — the pre-batching behaviour.
- *
- *  It exists so the claim "batching does not change the answers" is checkable from
- *  outside: run a set of questions both ways and compare the probabilities. A claim
- *  about equivalence that only the author can test is not much of a claim. */
-function batchTokensFromUrl(): number | undefined {
-  try {
-    const v = new URLSearchParams(location.search).get("batchTokens");
-    const n = v === null ? NaN : Number(v);
-    return Number.isFinite(n) && n > 0 ? n : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 interface Landed {
   question: QuestionItem;
   index: number;
@@ -172,7 +156,6 @@ export default function App() {
         // Explicit order: Object.entries hoists integer-like keys, so questions named
         // "1", "2", "3" would run in numeric order regardless of how they are arranged.
         order: questions.map((q) => q.id),
-        batchTokens: batchTokensFromUrl(),
         onAnswer: (qid, answer, telemetry) => {
           const index = order.get(qid) ?? 0;
           landed.push({ question: questions[index], index, answer, telemetry });
