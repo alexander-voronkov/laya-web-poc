@@ -1,0 +1,48 @@
+name: Mirror the browser builds into one repo
+
+# Three of the four checkpoints this app serves live in other people's Hub
+# repositories. Any of them can be deleted, or re-uploaded under the same URL with
+# different weights — and because the app fetches by URL and the browser caches by
+# URL, that second case does not break the demo, it silently changes what it answers.
+#
+# So they are copied into one repository under our own account, one folder per
+# variant, with the file digests checked after upload. Apache-2.0 permits the copy and
+# requires the attribution, which the generated README carries.
+on:
+  workflow_dispatch:
+    inputs:
+      dest:
+        description: Hub repo to publish the collection to
+        default: alfred361/laya-web
+        required: true
+      dry_run:
+        description: "Verify sources and print the plan without uploading"
+        type: boolean
+        default: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install -q huggingface_hub
+
+      - name: Check disk before pulling ~2 GB
+        run: |
+          set -euo pipefail
+          df -h / | tail -1
+          disk=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
+          [ "$disk" -ge 12 ] || { echo "::error::need ~8 GB, runner has ${disk} GB"; exit 1; }
+
+      - name: Copy, verify and publish
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          DEST: ${{ inputs.dest }}
+          DRY: ${{ inputs.dry_run }}
+        run: python .github/scripts/mirror_models.py
