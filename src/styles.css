@@ -770,3 +770,21 @@ footer a {
 .q-budget .warn {
   color: var(--warn);
 }
+
+.batch-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.batch-picker label {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.batch-picker .warn {
+  flex-basis: 100%;
+  font-size: 12px;
+  line-height: 1.45;
+}

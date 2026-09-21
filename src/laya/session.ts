@@ -153,6 +153,12 @@ export interface RunOptions {
    *  the progress counter jumps around. Answers stay correctly attributed either way,
    *  but the sequence the user asked for is not the one that happens. */
   order?: string[];
+  /** How many questions may share one forward pass. 1 runs them one at a time.
+   *
+   *  Whether an export answers the same batched as it does alone is a property of that
+   *  export rather than of Laya — one here refuses a batch outright and another accepts
+   *  one and drifts 17 points. See `ModelSpec.batchSafe` and `export/batch_probe.py`. */
+  batchSize?: number;
 }
 
 export interface RunResult {
@@ -354,79 +360,154 @@ export class LayaSession {
     let aborted = false;
 
     const order = opts.order?.filter((id) => id in questions) ?? Object.keys(questions);
-    for (const qid of order) {
-      if (opts.signal?.aborted) { aborted = true; break; }
-      const qdef = questions[qid];
-      const qt0 = performance.now();
-      const q = toInternal(qdef);
+
+    // Every sequence first. Pure tokenization, no forward pass, so an impossible
+    // question surfaces before any compute is spent on the rest.
+    const built = order.map((qid) => {
+      const b0 = performance.now();
+      const q = toInternal(questions[qid]);
       const k = renderOptions(q).length;
       const { ids, markers, stats } = buildSequence(this.tok, state, q, this.maxLen, this.cfg.head_max_len);
       if (markers.length !== k) {
         throw new Error(`question ${JSON.stringify(qid)}: options do not fit in head_max_len=${this.cfg.head_max_len} tokens`);
       }
-      const buildMs = performance.now() - qt0;
-      const L = ids.length;
-      const att = new this.ort.Tensor("int64", new BigInt64Array(L).fill(1n), [1, L]);
-      const inputIds = new this.ort.Tensor("int64", BigInt64Array.from(ids, (x) => BigInt(x)), [1, L]);
-      const markerPos = new this.ort.Tensor("int64", BigInt64Array.from(markers, (x) => BigInt(x)), [1, markers.length]);
-      const markerMask = new this.ort.Tensor("bool", new Uint8Array(markers.length).fill(1), [1, markers.length]);
-      const qtypeT = new this.ort.Tensor("int64", BigInt64Array.from([QTYPES[q.t]], (x) => BigInt(x)), [1]);
+      return { qid, q, k, ids, markers, stats, buildMs: performance.now() - b0 };
+    });
 
-      // Two shapes of the same model. The English build ships the encoder and the
-      // decision head as separate graphs, so the hidden state crosses between two
-      // sessions; the multilingual build carries encoder, head, scorer and act head in
-      // one graph and takes every input at once. Where that leaves the split timings
-      // undefined, they are reported as such rather than invented.
-      let r: ort.InferenceSession.OnnxValueMapType;
+    for (const group of this.groupIntoBatches(built, opts.batchSize ?? 1)) {
+      if (opts.signal?.aborted) { aborted = true; break; }
+
+      // Padded exactly as the Python reference's collate_items does: ids padded with
+      // the pad token and marked 0 in the attention mask, marker_pos padded with 0 and
+      // marker_mask with false, so position 0 is written but never read.
+      const n = group.length;
+      const L = Math.max(...group.map((g) => g.ids.length));
+      const kmax = Math.max(...group.map((g) => g.markers.length));
+
+      const ids = new BigInt64Array(n * L).fill(BigInt(this.tok.padTokenId));
+      const att = new BigInt64Array(n * L);
+      const mpos = new BigInt64Array(n * kmax);
+      const mmask = new Uint8Array(n * kmax);
+      const qtype = new BigInt64Array(n);
+      group.forEach((g, r) => {
+        for (let i = 0; i < g.ids.length; i++) {
+          ids[r * L + i] = BigInt(g.ids[i]);
+          att[r * L + i] = 1n;
+        }
+        for (let i = 0; i < g.markers.length; i++) {
+          mpos[r * kmax + i] = BigInt(g.markers[i]);
+          mmask[r * kmax + i] = 1;
+        }
+        qtype[r] = BigInt(QTYPES[g.q.t]);
+      });
+
+      const attT = new this.ort.Tensor("int64", att, [n, L]);
+      const idsT = new this.ort.Tensor("int64", ids, [n, L]);
+      const mposT = new this.ort.Tensor("int64", mpos, [n, kmax]);
+      const mmaskT = new this.ort.Tensor("bool", mmask, [n, kmax]);
+      const qtypeT = new this.ort.Tensor("int64", qtype, [n]);
+
+      let r: Record<string, { data: unknown; dims: readonly number[] }>;
       let encoderMs: number;
       let headMs: number;
-      if (this.head) {
-        const e0 = performance.now();
-        const { hidden } = await this.enc.run({ input_ids: inputIds, attention_mask: att });
-        encoderMs = performance.now() - e0;
-        const h0 = performance.now();
-        r = await this.head.run({ hidden, attention_mask: att, marker_pos: markerPos, marker_mask: markerMask, qtype: qtypeT });
-        headMs = performance.now() - h0;
-      } else {
-        const e0 = performance.now();
-        r = await this.enc.run({
-          input_ids: inputIds,
-          attention_mask: att,
-          marker_pos: markerPos,
-          marker_mask: markerMask,
-          qtype: qtypeT,
-        });
-        encoderMs = performance.now() - e0;
-        headMs = 0;
+      try {
+        if (this.head) {
+          const e0 = performance.now();
+          const { hidden } = await this.enc.run({ input_ids: idsT, attention_mask: attT });
+          encoderMs = performance.now() - e0;
+          const h0 = performance.now();
+          r = await this.head.run({ hidden, attention_mask: attT, marker_pos: mposT, marker_mask: mmaskT, qtype: qtypeT }) as never;
+          headMs = performance.now() - h0;
+        } else {
+          const e0 = performance.now();
+          r = await this.enc.run({
+            input_ids: idsT, attention_mask: attT, marker_pos: mposT, marker_mask: mmaskT, qtype: qtypeT,
+          }) as never;
+          encoderMs = performance.now() - e0;
+          headMs = 0;
+        }
+      } catch (e) {
+        // A graph that refuses a batch says so in a broadcast error naming two numbers
+        // and nothing else. Name the cause, since the user chose the batch size.
+        if (n > 1) {
+          throw new Error(
+            `This checkpoint refused a batch of ${n}: ${String((e as Error)?.message ?? e).split("\n")[0]} ` +
+            `— set the batch size to 1.`,
+          );
+        }
+        throw e;
       }
 
-      const logits = Array.from(r.logits.data as Float32Array).slice(0, k);
-      const temperature = temperatureFor(this.cfg, QTYPES[q.t], k);
-      const p = softmax(logits.map((v) => v / temperature));
-      const act = softmax(Array.from(r.act_logits.data as Float32Array));
-      const answer = formatAnswer(q, p, act[0]);
-      out.answers[qid] = answer;
-      out.usage.input_tokens += L;
+      const logits = r.logits.data as Float32Array;
+      const logitsRow = Number(r.logits.dims[1] ?? kmax);
+      const actAll = r.act_logits.data as Float32Array;
+      const actRow = Number(r.act_logits.dims[1] ?? actAll.length / n);
 
-      const tel: QuestionTelemetry = {
-        qid,
-        type: q.t,
-        options: k,
-        temperatureBucket: tempBucket(QTYPES[q.t], k),
-        temperature,
-        stats,
-        buildMs,
-        encoderMs,
-        headMs,
-        totalMs: performance.now() - qt0,
-      };
-      perQuestion.push(tel);
-      opts.onAnswer?.(qid, answer, tel);
+      group.forEach((g, row) => {
+        const z: number[] = [];
+        for (let i = 0; i < g.k; i++) z.push(logits[row * logitsRow + i]);
+        const temperature = temperatureFor(this.cfg, QTYPES[g.q.t], g.k);
+        const p = softmax(z.map((v) => v / temperature));
+        const act = softmax(Array.from(actAll.slice(row * actRow, (row + 1) * actRow)));
+        const answer = formatAnswer(g.q, p, act[0]);
+        out.answers[g.qid] = answer;
+        // Real tokens, not padding -- the reference reports attention_mask.sum().
+        out.usage.input_tokens += g.ids.length;
+
+        const tel: QuestionTelemetry = {
+          qid: g.qid,
+          type: g.q.t,
+          options: g.k,
+          temperatureBucket: tempBucket(QTYPES[g.q.t], g.k),
+          temperature,
+          stats: g.stats,
+          buildMs: g.buildMs,
+          // These timings belong to the batch: one pass produced all `batchSize` of
+          // them, and dividing it up would invent a per-question number nobody measured.
+          batchSize: n,
+          encoderMs,
+          headMs,
+          totalMs: g.buildMs + encoderMs + headMs,
+        };
+        perQuestion.push(tel);
+        opts.onAnswer?.(g.qid, answer, tel);
+      });
+
       // Inference runs on the main thread (see load()), so without a yield the page
-      // never repaints and a six-question batch is indistinguishable from a hang.
+      // never repaints and a long run is indistinguishable from a hang.
       await new Promise((res) => setTimeout(res, 0));
     }
 
     return { response: out, aborted, telemetry: { questions: perQuestion, totalMs: performance.now() - t0 } };
+  }
+
+  /** Split questions into groups of at most `size`, and no larger than memory allows.
+   *
+   *  Padding waste is not a concern and the grouping does not try to avoid it: every
+   *  question in a request shares one state, so the sequences differ only by the
+   *  question head and come out within a few tokens of each other.
+   *
+   *  Memory is. The encoder materialises `n x L x hidden` floats, which at L=4096 is
+   *  ~16 MB per question on top of the attention intermediates, in a browser tab
+   *  already holding several hundred megabytes of weights. So a group is also capped by
+   *  padded tokens, and a single question always forms a group of its own rather than
+   *  being refused for being long. */
+  private groupIntoBatches<T extends { ids: number[] }>(items: T[], size: number, tokenBudget = 16384): T[][] {
+    const cap = Math.max(1, Math.floor(size));
+    const groups: T[][] = [];
+    let current: T[] = [];
+    let width = 0;
+    for (const it of items) {
+      const w = Math.max(width, it.ids.length);
+      if (current.length && (current.length >= cap || w * (current.length + 1) > tokenBudget)) {
+        groups.push(current);
+        current = [];
+        width = 0;
+      }
+      current.push(it);
+      width = Math.max(width, it.ids.length);
+    }
+    if (current.length) groups.push(current);
+    return groups;
   }
 }
