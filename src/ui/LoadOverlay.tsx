@@ -1,23 +1,24 @@
-import { NOMINAL_TOTAL_BYTES } from "../config";
+import type { ModelSpec } from "../models";
 import type { LoadProgress } from "../laya/session";
 import type { Phase } from "../useLaya";
 import { mb } from "../format";
 
 interface Props {
+  spec: ModelSpec;
   phase: Phase;
   error: string | null;
   files: LoadProgress[];
   onRetry: () => void;
 }
 
-export function LoadOverlay({ phase, error, files, onRetry }: Props) {
+export function LoadOverlay({ spec, phase, error, files, onRetry }: Props) {
   if (phase === "ready") return null;
   return (
     <div id="overlay">
       <div className="overlay-card">
         <h3>Loading the model</h3>
         <p className="muted">
-          ~{mb(NOMINAL_TOTAL_BYTES)} MB, on the first visit only: the files are cached by the browser,
+          {spec.label}: ~{mb(spec.nominalBytes)} MB, on the first visit only: the files are cached by the browser,
           so next time is almost instant. Everything runs locally; the text never leaves the machine.
         </p>
         <div id="ov-files">

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { MODELS_BASE } from "./config";
+import { MODELS, type ModelId } from "./models";
 import { analyse, type Budget } from "./budget";
 import {
   FRAMING_LABELS,
@@ -52,9 +52,9 @@ interface RunRecord {
 }
 
 export default function App() {
-  const laya = useLaya();
   const [session, setSession] = useState(loadSession);
-  const { text, task, framing, questions, counter, maxLen } = session;
+  const { text, task, framing, questions, counter, maxLen, model } = session;
+  const laya = useLaya(model);
 
   const [live, setLive] = useState<Landed[]>([]);
   const [result, setResult] = useState<RunRecord | null>(null);
@@ -75,7 +75,10 @@ export default function App() {
 
   const issues = useMemo(() => validateQuestions(questions), [questions]);
   const invalid = useMemo(() => new Map(issues.map((i) => [i.uid, i.problem])), [issues]);
-  const advices = useMemo(() => advice(task, text, questions), [task, text, questions]);
+  const advices = useMemo(
+    () => advice(task, text, questions, laya.spec.languages),
+    [task, text, questions, laya.spec.languages],
+  );
   const hardAdvice = advices.filter((a) => a.level === "hard");
 
   // The budget runs the real tokenizer over every question, so it is debounced and
@@ -185,16 +188,19 @@ export default function App() {
     const payload = {
       generatedAt: result.at,
       model: {
-        base: MODELS_BASE,
-        quant: "q8 weight-only (MatMulNBits), onnxruntime-web/wasm",
+        id: laya.spec.id,
+        base: laya.spec.base,
+        layout: laya.spec.layout,
         maxLen: result.maxLen,
         maxLenChosenAutomatically: maxLen === null,
         trainedMaxLen: laya.core?.cfg.max_len ?? null,
         headMaxLen: laya.core?.cfg.head_max_len ?? null,
-        calibration:
-          "temperatures were fitted by the original author on the fp32 model and not refitted " +
-          "after quantisation; read the probabilities as an ordering, not as frequencies",
-        englishOnly: true,
+        calibration: laya.spec.languages === "multilingual"
+          ? "this checkpoint ships with no fitted temperatures at all — all 1.0, temperature_by_options empty; read the probabilities as an ordering"
+          : "temperatures were fitted by the original author on the fp32 model and not refitted after quantisation; read the probabilities as an ordering, not as frequencies",
+        languages: laya.spec.languages,
+        // Recorded because it is the reason a run has one forward pass per question.
+        batchSafe: laya.spec.batchSafe,
       },
       input: result.input,
       layaRequest: { state: result.state, questions: result.request },
@@ -272,6 +278,8 @@ export default function App() {
               Local Storage. The example is loaded instead.
             </div>
           )}
+
+          <ModelPicker value={model} busy={running} onChange={(m) => patch({ model: m })} />
 
           <section className="card">
             <h2>1 · Text</h2>
@@ -430,6 +438,7 @@ export default function App() {
               stages={laya.stages}
               cache={laya.cache}
               session={laya.session}
+              spec={laya.spec}
               ready={laya.phase === "ready"}
               run={result ? { ...result.telemetry, aborted: result.aborted, requested: result.requested } : null}
             />
@@ -449,7 +458,7 @@ export default function App() {
         </footer>
       </div>
 
-      <LoadOverlay phase={laya.phase} error={laya.error} files={laya.files} onRetry={laya.retry} />
+      <LoadOverlay spec={laya.spec} phase={laya.phase} error={laya.error} files={laya.files} onRetry={laya.retry} />
     </>
   );
 }
@@ -505,6 +514,42 @@ function ContextBudget({ value, resolved, trained, onChange }: {
         ModernBERT alternates local and global attention layers.
       </div>
     </div>
+  );
+}
+
+
+/** Switching checkpoint means another few hundred megabytes, so the picker says what
+ *  each one costs and what it is for rather than listing two opaque names. */
+function ModelPicker({ value, onChange, busy }: {
+  value: ModelId; onChange: (m: ModelId) => void; busy: boolean;
+}) {
+  const spec = MODELS[value];
+  return (
+    <section className="card">
+      <h2>0 · Model</h2>
+      <div className="radio-row">
+        <select
+          id="model-picker"
+          value={value}
+          disabled={busy}
+          onChange={(e) => onChange(e.target.value as ModelId)}
+        >
+          {Object.values(MODELS).map((m) => (
+            <option key={m.id} value={m.id}>{m.label}</option>
+          ))}
+        </select>
+        {busy && <span className="muted">finish the run before switching</span>}
+      </div>
+      <div className="field-note">{spec.note}</div>
+      <div className="field-note">
+        Questions run one at a time, on both builds. Laya answers a whole batch in one
+        pass natively, but neither export here can: the English one refuses a batch
+        outright, and the multilingual one accepts it and quietly answers differently —
+        its activation scales are derived per tensor, so one question's numbers depend
+        on the others sharing the pass. Measured at up to 21 percentage points, enough
+        to flip a decision.
+      </div>
+    </section>
   );
 }
 
