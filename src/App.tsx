@@ -54,7 +54,7 @@ interface RunRecord {
 
 export default function App() {
   const [session, setSession] = useState(loadSession);
-  const { text, task, framing, questions, counter, maxLen, model } = session;
+  const { text, task, framing, questions, counter, maxLen, model, batchSize } = session;
   const laya = useLaya(model);
 
   const [live, setLive] = useState<Landed[]>([]);
@@ -160,6 +160,7 @@ export default function App() {
         // Explicit order: Object.entries hoists integer-like keys, so questions named
         // "1", "2", "3" would run in numeric order regardless of how they are arranged.
         order: questions.map((q) => q.id),
+        batchSize,
         onAnswer: (qid, answer, telemetry) => {
           const index = order.get(qid) ?? 0;
           landed.push({ question: questions[index], index, answer, telemetry });
@@ -182,7 +183,7 @@ export default function App() {
       setRunning(false);
       abortRef.current = null;
     }
-  }, [laya.session, laya.core, running, issues, broken, questions, task, text, framing, maxLen]);
+  }, [laya.session, laya.core, running, issues, broken, questions, task, text, framing, maxLen, batchSize]);
 
   const exportJson = useCallback(() => {
     if (!result) return;
@@ -403,6 +404,12 @@ export default function App() {
               Get answers
             </button>
             {running && <button className="btn" onClick={() => abortRef.current?.abort()}>Stop</button>}
+            <BatchPicker
+              value={batchSize}
+              safe={laya.spec.batchSafe}
+              disabled={running}
+              onChange={(v) => patch({ batchSize: v })}
+            />
             <span className={`muted${status?.error ? " error" : ""}`}>
               {status?.text ??
                 (laya.phase !== "ready"
@@ -521,6 +528,46 @@ function ContextBudget({ value, resolved, trained, onChange }: {
 
 /** Switching checkpoint means another few hundred megabytes, so the picker says what
  *  each one costs and what it is for rather than listing two opaque names. */
+
+/** Questions per forward pass. 1 is one at a time.
+ *
+ *  Laya answers a whole request in one pass natively, and that is where its published
+ *  39.5 ms for one question against 158.6 ms for ten comes from. Whether a given export
+ *  can is a property of the export, and the two measured here disagree: the English q8
+ *  graph refuses a batch outright, and the multilingual int8 graph accepts one and
+ *  answers differently, because dynamic quantization takes activation scales per tensor
+ *  and so couples the rows. That one shifted probabilities by up to 21 points and
+ *  flipped a decision.
+ *
+ *  So the control exists, defaults to off, and says which case the current model is in
+ *  rather than letting a silent one look like a fast one. */
+function BatchPicker({ value, safe, disabled, onChange }: {
+  value: number; safe: boolean; disabled: boolean; onChange: (v: number) => void;
+}) {
+  return (
+    <span className="batch-picker">
+      <label htmlFor="batch-size">Questions per pass</label>
+      <select
+        id="batch-size"
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(Number(e.target.value))}
+      >
+        <option value={1}>1 — one at a time</option>
+        {[2, 4, 8, 16].map((n) => <option key={n} value={n}>{n}</option>)}
+      </select>
+      {value > 1 && !safe && (
+        <span className="warn">
+          this export has not been shown to answer the same batched as it does alone. It
+          will either refuse the batch with an error, or return numbers that differ —
+          measured at up to 21 points elsewhere, enough to flip a decision. Compare
+          against 1 before believing a batched answer.
+        </span>
+      )}
+    </span>
+  );
+}
+
 function ModelPicker({ value, onChange, busy }: {
   value: ModelId; onChange: (m: ModelId) => void; busy: boolean;
 }) {

@@ -26,6 +26,8 @@ export interface Session {
   version: number;
   /** Which checkpoint to run. */
   model: ModelId;
+  /** Questions per forward pass; 1 runs them one at a time. */
+  batchSize: number;
   /** Sequence budget, or null to use the checkpoint default. */
   maxLen: number | null;
   text: string;
@@ -40,6 +42,9 @@ export function defaultSession(): Session {
   return {
     version: VERSION,
     model: DEFAULT_MODEL,
+    // One at a time by default: of the exports here, none has been shown to answer the
+    // same batched as it does alone, and one of them drifts 17 points while looking fine.
+    batchSize: 1,
     maxLen: null,
     text: SEED_TEXT,
     task: SEED_TASK,
@@ -61,6 +66,7 @@ interface RawSession {
   counter: unknown;
   maxLen?: unknown;
   model?: unknown;
+  batchSize?: unknown;
 }
 
 function isRawSession(v: unknown): v is RawSession {
@@ -154,6 +160,10 @@ export function loadSession(): Session {
       // Absent in drafts saved before the picker existed, and an unknown id must not
       // reach the loader as a URL.
       model: typeof parsed.model === "string" && parsed.model in MODELS ? (parsed.model as ModelId) : DEFAULT_MODEL,
+      // A hand-edited value must not reach a tensor shape.
+      batchSize: typeof parsed.batchSize === "number" && Number.isFinite(parsed.batchSize)
+        ? Math.min(16, Math.max(1, Math.round(parsed.batchSize)))
+        : 1,
       // Absent in drafts saved before the setting existed, and a hand-edited value
       // must not reach the tensor shape: clamp to a sane window or fall back.
       maxLen:
