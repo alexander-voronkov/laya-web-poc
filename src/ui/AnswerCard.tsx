@@ -29,7 +29,9 @@ export function AnswerCard({ question: q, index, answer: ans, telemetry }: Props
       <div className="ans-head">
         <span className="ans-num">Question {index + 1}</span>
         <span className="ans-type">{TYPE_LABELS[q.type]}</span>
-        <span className="ans-ms">{ms(telemetry.totalMs)}</span>
+        <span className="ans-ms" title={telemetry.batchSize > 1 ? `one forward pass shared by ${telemetry.batchSize} questions` : undefined}>
+          {ms(telemetry.totalMs)}{telemetry.batchSize > 1 ? ` / ${telemetry.batchSize}` : ""}
+        </span>
         <button className="icon-btn" title="Copy the answer with its metrics" onClick={copy}>⧉</button>
         {copied && (
           <span className={copied === "ok" ? "muted" : "error"}>
@@ -152,8 +154,12 @@ function Breakdown({ t, act }: { t: QuestionTelemetry; act: number }) {
     ["Options", s.optionsShrunk
       ? `${s.optionTokens} of ${s.optionTokensFull} tokens — each option shortened individually`
       : `${s.optionTokens} tokens, in full`],
-    ["Timing", `total ${ms(t.totalMs)} · encoder ${ms(t.encoderMs)} · head ${ms(t.headMs)} · build ${ms(t.buildMs)}`],
-    ["Encoder throughput", `${(s.totalTokens / (t.encoderMs / 1000)).toFixed(0)} tokens/s`],
+    ["Timing", t.batchSize > 1
+      ? `encoder ${ms(t.encoderMs)} · head ${ms(t.headMs)} — one forward pass shared by ${t.batchSize} questions · sequence built in ${ms(t.buildMs)}`
+      : `total ${ms(t.totalMs)} · encoder ${ms(t.encoderMs)} · head ${ms(t.headMs)} · build ${ms(t.buildMs)}`],
+    ["Encoder throughput", t.batchSize > 1
+      ? "measured per batch, see the metrics panel"
+      : `${(s.totalTokens / (t.encoderMs / 1000)).toFixed(0)} tokens/s`],
     ["Temperature", `${t.temperature.toFixed(4)} (bucket ${t.temperatureBucket}, ${t.options} options)`],
     // Documented on the model card as saturated at 1.000 on every input tested, so
     // showing it without this line would invite reading signal into a constant.
