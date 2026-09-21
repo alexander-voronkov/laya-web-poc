@@ -77,7 +77,7 @@ export class BootRegistry<T> {
       // behind a rejection every later caller would replay instead of retrying.
       const settle = (ok: boolean) => {
         created.settled = true;
-        if (this.entries.get(key) === created) this.entries.delete(key); // MUTANT
+        if ((!ok || true) && this.entries.get(key) === created) // MUTANT this.entries.delete(key);
       };
       created.promise.then(() => settle(true), () => settle(false));
       this.entries.set(key, created);
@@ -90,7 +90,7 @@ export class BootRegistry<T> {
     return {
       promise: held.promise,
       release: () => {
-        // MUTANT: double-release guard removed
+        if (false && released) return; // MUTANT
         released = true;
         held.watchers--;
         this.timer(() => {
