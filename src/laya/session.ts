@@ -289,8 +289,8 @@ export class LayaSession {
       // model" in front of a list where two of three are also refused is not help.
       throw new Error(
         "This build needs WebGPU, and this browser does not expose navigator.gpu. " +
-        "Pick \"Multilingual, general (int8)\" — it is the one build here that runs " +
-        "without a GPU.",
+        "Pick one of the int8 builds — \"Multilingual, fine-tuned (int8)\" is the same " +
+        "fine-tune as this one and runs without a GPU.",
       );
     }
     if (import.meta.env.PROD) {

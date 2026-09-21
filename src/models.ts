@@ -79,9 +79,38 @@ export interface ModelSpec {
  *  throughout and the per-source layout differences stop at the mirror. */
 const MIRROR = "https://huggingface.co/alfred361/laya-web/resolve/main";
 
-export type ModelId = "multilingual-tuned" | "multilingual-fp16" | "multilingual";
+export type ModelId = "multilingual-tuned-q8" | "multilingual-tuned" | "multilingual-fp16" | "multilingual";
 
 export const MODELS: Record<ModelId, ModelSpec> = {
+  "multilingual-tuned-q8": {
+    id: "multilingual-tuned-q8",
+    label: "Multilingual, fine-tuned (mmBERT-base, int8) — runs anywhere",
+    backend: "wasm",
+    base: MIRROR + "/multilingual-tuned-q8/v1",
+    tokenizerPath: "",
+    layout: "split",
+    graphs: [
+      { name: "encoder_q8", externalData: true },
+      { name: "head_q8", externalData: true },
+    ],
+    cache: "laya-weights-mlt-q8-v1",
+    // 509 MB encoder + 30 MB head + 34 MB tokenizer.
+    nominalBytes: 574_000_000,
+    languages: "multilingual",
+    // EQUIVALENT from batch_probe.py: weight-only quantization leaves activations in
+    // fp32, so nothing couples the rows, and this export was traced at batch 3.
+    batchSafe: true,
+    note:
+      "The same fine-tune as the full-precision build, quantized to run without a GPU — " +
+      "so this is the one that works on any machine or phone, and it is the default for " +
+      "that reason. Every decision in the reference set is unchanged (100% argmax " +
+      "agreement) and the worst single probability moves 2.4 points. That is above the " +
+      "2-point limit the pipeline applies to the English checkpoint, and deliberately " +
+      "so: weight-only int8 costs a 322M encoder more than it costs a 421M one, and " +
+      "three block sizes measured 3.0, 2.8 and 2.4 points with no setting reaching 2. " +
+      "For comparison, the untuned int8 build below moves probabilities by up to 17 " +
+      "points and flips decisions. 574 MB.",
+  },
   "multilingual-tuned": {
     id: "multilingual-tuned",
     label: "Multilingual, fine-tuned (mmBERT-base, fp32)",
@@ -170,15 +199,17 @@ export const MODELS: Record<ModelId, ModelSpec> = {
   },
 };
 
-/** The one worth judging the model by.
+/** The fine-tune, in the form that loads on anything.
  *
- *  It needs WebGPU, which every current desktop browser and both mobile engines now
- *  have, and 1.3 GB, which the demo was explicitly told not to optimise for. A browser
- *  without WebGPU is refused with a message naming the wasm build rather than quietly
- *  served a worse model under the same name -- see LayaSession.load. Defaulting to the
- *  build that always loads was the alternative, and it would have meant every first
- *  impression coming from the weakest checkpoint here. */
-export const DEFAULT_MODEL: ModelId = "multilingual-tuned";
+ *  Choosing between "the best numbers" and "it works here" stopped being necessary once
+ *  the fine-tune existed as weight-only int8: it needs no GPU, batches, costs 574 MB
+ *  rather than 1.3 GB, and gives the same decision on every case in the reference set as
+ *  the full-precision build. What it costs is 2.4 points on one probability, which the
+ *  model's note states rather than hides.
+ *
+ *  The full-precision build stays one click away for anyone who wants the exact numbers,
+ *  and a browser without WebGPU is refused by it with a message naming this one. */
+export const DEFAULT_MODEL: ModelId = "multilingual-tuned-q8";
 
 export function modelFor(id: string | null | undefined): ModelSpec {
   return MODELS[(id as ModelId) in MODELS ? (id as ModelId) : DEFAULT_MODEL];

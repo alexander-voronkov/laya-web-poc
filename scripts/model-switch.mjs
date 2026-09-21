@@ -31,14 +31,15 @@ const SITE = process.env.SITE || "https://laya.voronkov.club";
  *  script checks this map against the picker and refuses to run if a model is missing,
  *  since a check that matches nothing reads the same as a check that passed. */
 const FOLDER = {
+  "multilingual-tuned-q8": "multilingual-tuned-q8",
   "multilingual-tuned": "multilingual-tuned-fp32-batched",
   "multilingual-fp16": "multilingual-fp16",
   "multilingual": "multilingual-int8",
 };
 // The default is what boots before anything is picked, so it is the one that can bleed
 // into another model's run. Every other model is checked against it.
-const DEFAULT_MODEL = process.env.DEFAULT_MODEL || "multilingual-tuned";
-const MODELS = (process.env.MODEL || "multilingual-fp16,multilingual").split(",");
+const DEFAULT_MODEL = process.env.DEFAULT_MODEL || "multilingual-tuned-q8";
+const MODELS = (process.env.MODEL || "multilingual-tuned,multilingual-fp16,multilingual").split(",");
 
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 
