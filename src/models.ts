@@ -93,9 +93,11 @@ export const MODELS: Record<ModelId, ModelSpec> = {
     batchSafe: false,
     note:
       "100+ languages, and a text in one language with questions in another works. " +
-      "1024-token context. Smaller than the English build at 326 MB, and quantized for CPUs " +
-      "rather than for WebGPU. Ships with no fitted temperatures at all, so read its " +
-      "probabilities as an ordering.",
+      "1024-token context, 326 MB, and by far the fastest here — but the least faithful: " +
+      "its dynamic quantization shifts probabilities by up to 17 points against the fp32 " +
+      "reference, enough to flip roughly one decision in sixteen. It also ships with no " +
+      "fitted temperatures at all. Good for triage and for languages; for a number you " +
+      "intend to act on, check it against fp16 or English.",
   },
   "multilingual-fp16": {
     id: "multilingual-fp16",
@@ -117,6 +119,7 @@ export const MODELS: Record<ModelId, ModelSpec> = {
     requiresWebGPU: true,
     note:
       "Half precision, so no quantization loss at all -- the closest thing here to the " +
+      "unquantised checkpoint, and the answer to the int8 build's 17-point drift. " +
       "unquantised checkpoint. Needs WebGPU: on a CPU without native fp16, ONNX Runtime " +
       "emulates it in software at roughly 3.9 s per sequence, which is why this build is " +
       "refused rather than silently run on wasm. 647 MB, the largest of the three.",

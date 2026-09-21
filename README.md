@@ -157,6 +157,27 @@ SITE=http://localhost:4173 node scripts/smoke.mjs --local   # against a preview 
 
 It reports `crossOriginIsolated`, how long the weights took, the answers with their distributions, the whole metrics panel, the per-question table, and any console error or failed request. Two screenshots land next to it.
 
+## Which checkpoint, and what each one costs
+
+Three are selectable. They are not three qualities of the same thing; each trades a different axis, and the numbers below were measured here rather than quoted.
+
+| | English q8 | Multilingual int8 | Multilingual fp16 |
+| --- | --- | --- | --- |
+| backbone | ModernBERT-large 421M | mmBERT-base 322M | mmBERT-base 322M |
+| languages | English; fails on non-Latin script | 100+, cross-lingual works | 100+, cross-lingual works |
+| context | 512 trained | 1024 trained | 1024 trained |
+| download | 524 MB | 326 MB | 647 MB |
+| runs on | wasm, anywhere | wasm, anywhere | **WebGPU only** |
+| speed, one laptop | ~11 s at 512 tokens | **~220 ms at 303 tokens** | unmeasured |
+| fidelity vs fp32 | 100% argmax, 1.6 pp worst shift | **93.8% argmax, 16.9 pp worst shift** | exact by construction |
+| temperatures | fitted | **none, all 1.0** | none, all 1.0 |
+
+The fidelity row is the one that is easy to miss. The English build uses *weight-only* quantization: weights are compressed, activations stay fp32, and its published parity against the fp32 model is 100% argmax agreement with a worst probability shift of 0.0158. The multilingual int8 build uses *dynamic* quantization, which derives activation scales from the tensor at run time. Measured here on 16 questions across an English and a Russian text, against that same repository's own fp32 export: 15 of 16 argmax decisions agree, and the worst shift is **16.9 percentage points** — ten times the English build's — with one decision flipped outright. Its publisher's claim of "100% classification accuracy preserved" is a claim about the latency work, not something this measurement supports.
+
+That is also why it is fast. Dynamic quantization runs integer kernels end to end; weight-only dequantizes inside the kernel and computes in fp32, which is most of the twentyfold difference in the table. Faithful, fast, runs anywhere — pick two.
+
+None of this is the dominant term in accuracy. On typed decisions, the shape of task this page is for, the upstream benchmark puts the base checkpoints at 0.362 (English) and 0.342 (multilingual) against a 0.461 majority-class baseline, with random guessing at 0.318 — both below the trivial answer — while the fine-tuned [`laya-typed-decisions`](https://huggingface.co/convaiinnovations/laya-typed-decisions) scores 0.766. Choosing between the models here is choosing speed and language coverage. It is not choosing accuracy, and no amount of it substitutes for specialising the model on labelled data. `export/` holds the pipeline for building that checkpoint into a browser-ready graph.
+
 ## Model notes and limits
 
 These are properties of the base checkpoint, documented on its model card, not of this prototype:
