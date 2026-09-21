@@ -1,0 +1,146 @@
+name: Export a Laya checkpoint for the browser
+
+# Run by hand. This is not part of CI: it downloads a checkpoint, traces it and
+# quantizes it, which takes tens of minutes and has nothing to do with a pull request.
+#
+# It exists because the machines to hand could not do it. The laptop had 0.9 GB free of
+# 15.6, the production droplet is 1 vCPU and 2 GB, and Colab has no API to drive — while
+# a GitHub runner is 4 vCPU and 16 GB, already wired to this repository, and something
+# whose logs can be read without anyone's hands.
+on:
+  workflow_dispatch:
+    inputs:
+      checkpoint:
+        description: Hugging Face model id to export
+        default: convaiinnovations/laya-typed-decisions
+        required: true
+      push_to:
+        description: "Hub repo to publish to; leave empty to only produce an artifact"
+        default: ""
+        required: false
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      # Fail here rather than forty minutes in. The runner's disk is the tight one:
+      # the checkpoint is ~850 MB, the fp32 graphs another ~1.7 GB, and the quantizer
+      # holds a second copy while it writes.
+      - name: Check the runner can hold this
+        run: |
+          set -euo pipefail
+          echo "cores: $(nproc)"
+          free -g | head -2
+          df -h / | tail -1
+          ram=$(free -g | awk '/^Mem:/{print $2}')
+          disk=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
+          [ "$ram" -ge 12 ] || { echo "::error::need ~8 GB to trace a 421M model, runner reports ${ram} GB"; exit 1; }
+          [ "$disk" -ge 12 ] || { echo "::error::need ~10 GB of disk, runner has ${disk} GB"; exit 1; }
+
+      - name: Fetch the export pipeline
+        run: git clone --depth 1 https://github.com/nvkudva/laya-web.git pipeline
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # transformers>=5 is load-bearing, not hygiene: 4.x misreads this encoder's split
+      # rope_theta — 160000 on the ten full-attention layers, 10000 on the eighteen
+      # sliding ones — and does it without raising. The export then succeeds and the
+      # model is quietly wrong, which is the failure the gate below exists to catch.
+      - name: Install
+        run: |
+          set -euo pipefail
+          python -m pip install -q --upgrade pip
+          pip install -q torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -q 'transformers>=5.0' safetensors onnx 'onnxruntime>=1.20' huggingface_hub numpy
+          python - <<'PY'
+          import transformers
+          major = int(transformers.__version__.split(".")[0])
+          assert major >= 5, f"transformers {transformers.__version__} misreads this rope config silently"
+          print("transformers", transformers.__version__)
+          PY
+
+      - name: Download the checkpoint
+        env:
+          CKPT: ${{ inputs.checkpoint }}
+        run: |
+          set -euo pipefail
+          python - <<PY
+          from huggingface_hub import snapshot_download
+          p = snapshot_download("${CKPT}", local_dir="pipeline/export/laya-en")
+          print("downloaded to", p)
+          PY
+          ls -la pipeline/export/laya-en
+          cat pipeline/export/laya-en/rl_agent_config.json
+
+      # Reference outputs from the PyTorch model. Without this the gate has nothing to
+      # compare against and every later "PASS" would be a statement about nothing.
+      - name: Reference outputs
+        working-directory: pipeline/export
+        run: |
+          set -euo pipefail
+          python make_fixtures.py
+          python dump_golden.py
+
+      # The recipe exactly as nvkudva documents it. Weight-only on purpose: plain
+      # dynamic int8 collapses this architecture to 69% argmax agreement, because the
+      # damage is activation quantization rather than weight precision. Leaving
+      # activations in fp32 avoids that, and is also what would make the result
+      # batch-exact, unlike the dynamic-int8 multilingual build.
+      - name: Export and quantize
+        working-directory: pipeline/export
+        run: |
+          set -euo pipefail
+          python export_onnx.py
+          python quantize_nbits.py --block-size 64 --out out/enc_nb8_bs64.onnx
+          python embed_fp16.py --src out/enc_nb8_bs64.onnx --out out/encoder_q8.onnx
+          python head_fp16_storage.py
+          ls -la out/
+
+      - name: Verify against the fp32 reference
+        working-directory: pipeline/export
+        run: python verify_onnx.py --encoder out/encoder_q8.onnx --head out/head_q8.onnx --gate
+
+      - name: Assemble what the app fetches
+        working-directory: pipeline/export
+        run: |
+          set -euo pipefail
+          mkdir -p upload/v1
+          cp out/encoder_q8.onnx out/head_q8.onnx upload/v1/
+          # .data siblings exist only when the graph keeps weights externally.
+          for f in out/encoder_q8.onnx.data out/head_q8.onnx.data; do [ -f "$f" ] && cp "$f" upload/v1/; done
+          cp laya-en/rl_agent_config.json upload/v1/
+          cp laya-en/tokenizer/tokenizer.json laya-en/tokenizer/tokenizer_config.json upload/v1/
+          ls -la upload/v1
+          du -sh upload/v1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: laya-web-export
+          path: pipeline/export/upload
+          retention-days: 14
+
+      # Optional: needs HF_TOKEN with write access. Without it the artifact above is
+      # the deliverable and the upload is somebody's manual step.
+      - name: Publish to the Hub
+        if: ${{ inputs.push_to != '' }}
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          REPO: ${{ inputs.push_to }}
+        working-directory: pipeline/export
+        run: |
+          set -euo pipefail
+          [ -n "$HF_TOKEN" ] || { echo "::error::push_to was given but the HF_TOKEN secret is not set"; exit 1; }
+          python - <<PY
+          import os
+          from huggingface_hub import HfApi
+          api = HfApi(token=os.environ["HF_TOKEN"])
+          repo = os.environ["REPO"]
+          api.create_repo(repo, repo_type="model", exist_ok=True)
+          # v1 is part of the browser cache key on purpose: caches key on URL, so a
+          # re-export goes to v2 rather than serving stale weights to a returning visitor.
+          api.upload_folder(folder_path="upload", repo_id=repo, repo_type="model")
+          print("https://huggingface.co/" + repo)
+          PY
