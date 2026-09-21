@@ -46,3 +46,13 @@ jobs:
           DEST: ${{ inputs.dest }}
           DRY: ${{ inputs.dry_run }}
         run: python .github/scripts/mirror_models.py
+
+      # Separate from the copy, and it runs whether or not anything was copied: the
+      # README describes every folder in the mirror, including the ones published by
+      # export-model.yml, which this job never touches.
+      - name: Rewrite the README
+        if: ${{ !inputs.dry_run }}
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          DEST: ${{ inputs.dest }}
+        run: python .github/scripts/mirror_readme.py
