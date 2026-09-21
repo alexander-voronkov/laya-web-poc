@@ -677,6 +677,12 @@ footer a {
   align-items: center;
   gap: 6px;
   flex: none;
+  /* The label text is a bare text node, so in a flex label it becomes an anonymous
+     flex item that wraps on its own -- flex: none sizes the label but does not stop
+     that. Measured before this line: the row had 798px for three labels totalling
+     472px, and each one still broke across three lines. Let the row wrap instead;
+     that is what flex-wrap on .radio-row is for. */
+  white-space: nowrap;
   font-size: 13px;
   cursor: pointer;
 }
