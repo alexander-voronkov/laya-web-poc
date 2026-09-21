@@ -5,6 +5,7 @@
 // under a blocked-site-data policy, and an unhandled throw here would take the whole
 // page down before the first render. A failed read means "no saved session", never
 // an error the user has to deal with.
+import { DEFAULT_MODEL, MODELS, type ModelId } from "./models";
 import {
   SEED_TASK,
   SEED_TEXT,
@@ -23,6 +24,8 @@ const VERSION = 1;
 
 export interface Session {
   version: number;
+  /** Which checkpoint to run. */
+  model: ModelId;
   /** Sequence budget, or null to use the checkpoint default. */
   maxLen: number | null;
   text: string;
@@ -36,6 +39,7 @@ export function defaultSession(): Session {
   const seed = seedQuestions();
   return {
     version: VERSION,
+    model: DEFAULT_MODEL,
     maxLen: null,
     text: SEED_TEXT,
     task: SEED_TASK,
@@ -56,6 +60,7 @@ interface RawSession {
   questions: unknown;
   counter: unknown;
   maxLen?: unknown;
+  model?: unknown;
 }
 
 function isRawSession(v: unknown): v is RawSession {
@@ -146,6 +151,9 @@ export function loadSession(): Session {
       task: parsed.task as string,
       framing: parsed.framing as FramingMode,
       counter: parsed.counter as number,
+      // Absent in drafts saved before the picker existed, and an unknown id must not
+      // reach the loader as a URL.
+      model: typeof parsed.model === "string" && parsed.model in MODELS ? (parsed.model as ModelId) : DEFAULT_MODEL,
       // Absent in drafts saved before the setting existed, and a hand-edited value
       // must not reach the tensor shape: clamp to a sane window or fall back.
       maxLen:

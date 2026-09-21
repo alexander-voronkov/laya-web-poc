@@ -9,6 +9,7 @@ import * as ort from "onnxruntime-web/wasm";
 import { buildSequence, renderOptions, toInternal, type Tok } from "./sequence";
 import { formatAnswer, softmax, tempBucket, temperatureFor } from "./postprocess";
 import { loadTokenizer } from "./tokenizer";
+import { weightFiles, type ModelSpec } from "../models";
 import {
   QTYPES,
   type Answer,
@@ -35,7 +36,7 @@ export interface Core {
 export type LoadStage = "core" | "weights" | "encoder-init" | "head-init";
 
 export interface LoadOptions {
-  base?: string;
+  spec: ModelSpec;
   onProgress?: (p: LoadProgress) => void;
   onStage?: (stage: LoadStage, ms: number) => void;
   threads?: number;
@@ -43,14 +44,14 @@ export interface LoadOptions {
   core?: Core;
 }
 
-const CACHE = "laya-weights-v1";
+
 
 /** Fetch with progress, backed by the Cache API so a reload does not re-download 524MB. */
-async function fetchCached(url: string, onProgress?: (p: LoadProgress) => void): Promise<Uint8Array> {
+async function fetchCached(url: string, cacheName: string, onProgress?: (p: LoadProgress) => void): Promise<Uint8Array> {
   const file = url.split("/").pop()!;
   let cache: Cache | undefined;
   try {
-    cache = await caches.open(CACHE);
+    cache = await caches.open(cacheName);
     const hit = await cache.match(url);
     if (hit) {
       const buf = new Uint8Array(await hit.arrayBuffer());
@@ -82,17 +83,18 @@ async function fetchCached(url: string, onProgress?: (p: LoadProgress) => void):
 
 /** What the weight cache actually holds -- reported rather than assumed, since a
  *  quota failure on put() leaves a loaded session with a partial cache. */
-export async function cachedWeights(): Promise<CacheState> {
-  const empty: CacheState = { bytes: 0, files: 0, expected: WEIGHT_FILES.length, unavailable: false };
+export async function cachedWeights(spec: ModelSpec): Promise<CacheState> {
+  const want = weightFiles(spec);
+  const empty: CacheState = { bytes: 0, files: 0, expected: want.length, unavailable: false };
   try {
-    const cache = await caches.open(CACHE);
+    const cache = await caches.open(spec.cache);
     let bytes = 0;
     let files = 0;
     for (const k of await cache.keys()) {
       const r = await cache.match(k);
       if (!r) continue;
       const name = new URL(k.url).pathname.split("/").pop() ?? "";
-      if (WEIGHT_FILES.includes(name)) files++;
+      if (want.includes(name)) files++;
       bytes += Number(r.headers.get("content-length") ?? 0) || (await r.blob()).size;
     }
     return { ...empty, bytes, files };
@@ -101,8 +103,8 @@ export async function cachedWeights(): Promise<CacheState> {
   }
 }
 
-export async function deleteWeightCache(): Promise<void> {
-  try { await caches.delete(CACHE); } catch { /* blocked storage */ }
+export async function deleteWeightCache(spec: ModelSpec): Promise<void> {
+  try { await caches.delete(spec.cache); } catch { /* blocked storage */ }
 }
 
 export interface RunOptions {
@@ -136,12 +138,10 @@ export function threadsAvailable(): boolean {
   return isolated && typeof SharedArrayBuffer !== "undefined";
 }
 
-/** The weight files a complete cache is expected to hold. */
-export const WEIGHT_FILES = ["encoder_q8.onnx", "encoder_q8.onnx.data", "head_q8.onnx", "head_q8.onnx.data"];
 
 export interface CacheState {
   bytes: number;
-  /** How many of WEIGHT_FILES are present. A put() that failed on quota leaves a
+  /** How many of the model's weight files are present. A put() that failed on quota leaves a
    *  working session behind a partly-filled cache, and summing the bytes that did
    *  land reads as a complete cache -- so the next visit re-downloads a few hundred
    *  megabytes after the page promised it would not. */
@@ -160,15 +160,16 @@ export function jsHeapBytes(): number | null {
 
 /** Fetch rl_agent_config.json + tokenizer.json -- small enough to drive the live
  *  token counter before any weights are downloaded. */
-export async function loadCore(base: string): Promise<Core> {
+export async function loadCore(spec: ModelSpec): Promise<Core> {
+  const base = spec.base;
   const [cfg, tok] = await Promise.all([
     // r.json() on a 404 surfaces as "Unexpected token <", which sends the reader
-    // looking for a parser bug instead of a wrong VITE_MODELS_BASE.
+    // looking for a parser bug instead of a wrong model base URL.
     fetch(`${base}/rl_agent_config.json`).then((r) => {
       if (!r.ok) throw new Error(`${base}/rl_agent_config.json: ${r.status} ${r.statusText}`);
       return r.json() as Promise<LayaConfig>;
     }),
-    loadTokenizer(base),
+    loadTokenizer(base, spec.tokenizerPath),
   ]);
   return { cfg, tok };
 }
@@ -199,11 +200,14 @@ export class LayaSession {
    *  one. Derived, not measured -- and the metrics panel says which. */
   readonly numThreads: number;
   readonly hardwareConcurrency: number;
+  readonly spec: ModelSpec;
   private tok: Tok;
+  /** : encoder then head. : one graph,  unused. */
   private enc: ort.InferenceSession;
-  private head: ort.InferenceSession;
+  private head: ort.InferenceSession | null;
 
-  private constructor(cfg: LayaConfig, tok: Tok, enc: ort.InferenceSession, head: ort.InferenceSession, requestedThreads: number) {
+  private constructor(spec: ModelSpec, cfg: LayaConfig, tok: Tok, enc: ort.InferenceSession, head: ort.InferenceSession | null, requestedThreads: number) {
+    this.spec = spec;
     this.cfg = cfg;
     this.maxLen = cfg.max_len;
     this.tok = tok;
@@ -214,8 +218,9 @@ export class LayaSession {
     this.hardwareConcurrency = navigator.hardwareConcurrency || 1;
   }
 
-  static async load(opts: LoadOptions = {}): Promise<LayaSession> {
-    const base = opts.base ?? "/models";
+  static async load(opts: LoadOptions): Promise<LayaSession> {
+    const spec = opts.spec;
+    const base = spec.base;
     // wasmPaths is not optional in production: left to the bundler, the build emits the
     // asyncify and jsep variants but not the plain threaded one, and session creation
     // then hangs with no error rather than failing. In dev, ORT resolves the runtime
@@ -239,42 +244,45 @@ export class LayaSession {
     // (both a user-created worker and ORT's own env.wasm.proxy hang with no error after
     // the weights load). Inference blocks the UI for the length of one forward pass.
     let t0 = performance.now();
-    const core = opts.core ?? await loadCore(base);
+    const core = opts.core ?? await loadCore(spec);
     opts.onStage?.("core", performance.now() - t0);
 
     let weightsMs = 0;
-    const mk = async (name: string): Promise<ort.InferenceSession> => {
+    const mk = async (g: { name: string; externalData: boolean }, stage: LoadStage): Promise<ort.InferenceSession> => {
       let t = performance.now();
-      const [graph, data] = [
-        await fetchCached(`${base}/${name}.onnx`, opts.onProgress),
-        await fetchCached(`${base}/${name}.onnx.data`, opts.onProgress),
-      ];
+      const graph = await fetchCached(`${base}/${g.name}.onnx`, spec.cache, opts.onProgress);
+      // The English build keeps its weights in a sibling .onnx.data; the multilingual
+      // one carries them inline, and asking for a .data that does not exist would 404.
+      const data = g.externalData
+        ? await fetchCached(`${base}/${g.name}.onnx.data`, spec.cache, opts.onProgress)
+        : null;
       weightsMs += performance.now() - t;
       t = performance.now();
       const s = await ort.InferenceSession.create(graph, {
         executionProviders: ["wasm"],
-        externalData: [{ data, path: `${name}.onnx.data` }],
+        ...(data ? { externalData: [{ data, path: `${g.name}.onnx.data` }] } : {}),
       });
-      opts.onStage?.(name === "encoder_q8" ? "encoder-init" : "head-init", performance.now() - t);
+      opts.onStage?.(stage, performance.now() - t);
       return s;
     };
-    // Releasing on the way out matters more than it looks. The encoder session is
-    // built first and holds ~470MB of wasm linear memory; if the head's weights then
-    // fail mid-download, dropping the JS reference does not free it -- only
-    // release() does. A retry would stack a second encoder on top of the first, which
-    // is precisely the out-of-memory this module's boot singleton exists to prevent.
+
+    // Releasing on the way out matters more than it looks. The first session holds
+    // hundreds of megabytes of wasm linear memory; if the second one's weights then
+    // fail mid-download, dropping the JS reference does not free it -- only release()
+    // does. A retry would stack a second encoder on the first, which is precisely the
+    // out-of-memory this module's boot singleton exists to prevent.
     let partial: ort.InferenceSession | undefined;
     let enc: ort.InferenceSession;
-    let head: ort.InferenceSession;
+    let head: ort.InferenceSession | null = null;
     try {
-      enc = partial = await mk("encoder_q8");
-      head = await mk("head_q8");
+      enc = partial = await mk(spec.graphs[0], "encoder-init");
+      if (spec.layout === "split") head = await mk(spec.graphs[1], "head-init");
     } catch (e) {
       await Promise.allSettled([partial?.release()]);
       throw e;
     }
     opts.onStage?.("weights", weightsMs);
-    return new LayaSession(core.cfg, core.tok, enc, head, threads);
+    return new LayaSession(spec, core.cfg, core.tok, enc, head, threads);
   }
 
   /** questions: {id: {type, instructions, criteria}} -- the Jev request shape.
@@ -290,7 +298,7 @@ export class LayaSession {
    *  that keeps running and keeps holding its 524MB.
    */
   async systemOne(state: State, questions: Questions, opts: RunOptions = {}): Promise<RunResult> {
-    const out: LayaResponse = { model: "laya-web-q8", answers: {}, usage: { input_tokens: 0, output_tokens: 0 } };
+    const out: LayaResponse = { model: this.spec.id, answers: {}, usage: { input_tokens: 0, output_tokens: 0 } };
     const perQuestion: QuestionTelemetry[] = [];
     const t0 = performance.now();
     let aborted = false;
@@ -309,21 +317,39 @@ export class LayaSession {
       const buildMs = performance.now() - qt0;
       const L = ids.length;
       const att = new ort.Tensor("int64", new BigInt64Array(L).fill(1n), [1, L]);
-      const e0 = performance.now();
-      const { hidden } = await this.enc.run({
-        input_ids: new ort.Tensor("int64", BigInt64Array.from(ids, (x) => BigInt(x)), [1, L]),
-        attention_mask: att,
-      });
-      const encoderMs = performance.now() - e0;
-      const h0 = performance.now();
-      const r = await this.head.run({
-        hidden,
-        attention_mask: att,
-        marker_pos: new ort.Tensor("int64", BigInt64Array.from(markers, (x) => BigInt(x)), [1, markers.length]),
-        marker_mask: new ort.Tensor("bool", new Uint8Array(markers.length).fill(1), [1, markers.length]),
-        qtype: new ort.Tensor("int64", BigInt64Array.from([QTYPES[q.t]], (x) => BigInt(x)), [1]),
-      });
-      const headMs = performance.now() - h0;
+      const inputIds = new ort.Tensor("int64", BigInt64Array.from(ids, (x) => BigInt(x)), [1, L]);
+      const markerPos = new ort.Tensor("int64", BigInt64Array.from(markers, (x) => BigInt(x)), [1, markers.length]);
+      const markerMask = new ort.Tensor("bool", new Uint8Array(markers.length).fill(1), [1, markers.length]);
+      const qtypeT = new ort.Tensor("int64", BigInt64Array.from([QTYPES[q.t]], (x) => BigInt(x)), [1]);
+
+      // Two shapes of the same model. The English build ships the encoder and the
+      // decision head as separate graphs, so the hidden state crosses between two
+      // sessions; the multilingual build carries encoder, head, scorer and act head in
+      // one graph and takes every input at once. Where that leaves the split timings
+      // undefined, they are reported as such rather than invented.
+      let r: ort.InferenceSession.OnnxValueMapType;
+      let encoderMs: number;
+      let headMs: number;
+      if (this.head) {
+        const e0 = performance.now();
+        const { hidden } = await this.enc.run({ input_ids: inputIds, attention_mask: att });
+        encoderMs = performance.now() - e0;
+        const h0 = performance.now();
+        r = await this.head.run({ hidden, attention_mask: att, marker_pos: markerPos, marker_mask: markerMask, qtype: qtypeT });
+        headMs = performance.now() - h0;
+      } else {
+        const e0 = performance.now();
+        r = await this.enc.run({
+          input_ids: inputIds,
+          attention_mask: att,
+          marker_pos: markerPos,
+          marker_mask: markerMask,
+          qtype: qtypeT,
+        });
+        encoderMs = performance.now() - e0;
+        headMs = 0;
+      }
+
       const logits = Array.from(r.logits.data as Float32Array).slice(0, k);
       const temperature = temperatureFor(this.cfg, QTYPES[q.t], k);
       const p = softmax(logits.map((v) => v / temperature));

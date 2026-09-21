@@ -204,7 +204,14 @@ const NON_LATIN = /[^\u0000-ɏ -⁯₠-₿]/;
 
 /** Documented limits of this checkpoint, surfaced against what is actually typed.
  *  Every item corresponds to a measured number on the model card, not a hunch. */
-export function advice(task: string, text: string, qs: QuestionItem[]): Advice[] {
+export function advice(
+  task: string,
+  text: string,
+  qs: QuestionItem[],
+  /** Only the English checkpoint collapses on non-Latin script; the multilingual one
+   *  is the remedy, so raising the banner while it is selected would be nonsense. */
+  languages: "english" | "multilingual" = "english",
+): Advice[] {
   const out: Advice[] = [];
 
   // English-only, and it does not fail gracefully: the model card reports 0.000
@@ -225,7 +232,7 @@ export function advice(task: string, text: string, qs: QuestionItem[]): Advice[]
       ...scoredItems(q).flatMap((o) => [o.label, o.description]),
     ]),
   ];
-  const foreign = inRequest.some((s) => NON_LATIN.test(s));
+  const foreign = languages === "english" && inRequest.some((s) => NON_LATIN.test(s));
   if (foreign) {
     out.push({
       uid: null,

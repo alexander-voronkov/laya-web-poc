@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { NOMINAL_TOTAL_BYTES } from "../config";
+import type { ModelSpec } from "../models";
 import { jsHeapBytes, type CacheState, type LayaSession, type LoadProgress, type LoadStage } from "../laya/session";
 import type { QuestionTelemetry } from "../laya/types";
 import { mb, ms, sec } from "../format";
@@ -17,6 +17,7 @@ interface Props {
   stages: Partial<Record<LoadStage, number>>;
   cache: CacheState | null;
   session: LayaSession | null;
+  spec: ModelSpec;
   ready: boolean;
   run: RunSummary | null;
 }
@@ -43,7 +44,7 @@ function useStorageEstimate(ready: boolean): StorageState {
   return s;
 }
 
-export function MetricsPanel({ files, stages, cache, session, ready, run }: Props) {
+export function MetricsPanel({ files, stages, cache, session, spec, ready, run }: Props) {
   const storage = useStorageEstimate(ready);
   const heap = jsHeapBytes();
 
@@ -72,11 +73,15 @@ export function MetricsPanel({ files, stages, cache, session, ready, run }: Prop
       "Weight download",
       ready || loaded
         ? `${mb(loaded)} MB${total ? ` of ${mb(total)} MB` : ""} · ${sec(weightsMs)}${cachedAny ? " · from the browser cache" : ""}`
-        : `~${mb(NOMINAL_TOTAL_BYTES)} MB, downloading…`,
+        : `~${mb(spec.nominalBytes)} MB, downloading…`,
     ],
     [
       "ORT session init",
-      encInit || headInit ? `${sec(encInit + headInit)} (encoder ${sec(encInit)} · head ${sec(headInit)})` : "—",
+      !(encInit || headInit)
+        ? "—"
+        : spec.layout === "split"
+          ? `${sec(encInit + headInit)} (encoder ${sec(encInit)} · head ${sec(headInit)})`
+          : `${sec(encInit)} — one graph, so there is no encoder/head split to report`,
     ],
     [
       "Wasm threads",
