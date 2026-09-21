@@ -77,7 +77,7 @@ export class BootRegistry<T> {
       // behind a rejection every later caller would replay instead of retrying.
       const settle = (ok: boolean) => {
         created.settled = true;
-        if ((!ok || true) && this.entries.get(key) === created) // MUTANT this.entries.delete(key);
+        if ((!ok || true) && this.entries.get(key) === created) this.entries.delete(key); // MUTANT
       };
       created.promise.then(() => settle(true), () => settle(false));
       this.entries.set(key, created);
