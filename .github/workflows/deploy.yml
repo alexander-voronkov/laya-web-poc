@@ -86,6 +86,8 @@ jobs:
           test -f dist/index.html
           test -f dist/ort/ort-wasm-simd-threaded.wasm
           test -f dist/ort/ort-wasm-simd-threaded.js
+          test -f dist/ort/ort-wasm-simd-threaded.jsep.wasm
+          test -f dist/ort/ort-wasm-simd-threaded.jsep.js
 
       # Host key is pinned from a secret rather than accepted on first use: rsync runs
       # with --delete against the live docroot, so a redirected connection would be a
@@ -169,6 +171,8 @@ jobs:
           }
           check_runtime ort-wasm-simd-threaded.wasm 'application/wasm'
           check_runtime ort-wasm-simd-threaded.js '(application|text)/javascript'
+          check_runtime ort-wasm-simd-threaded.jsep.wasm 'application/wasm'
+          check_runtime ort-wasm-simd-threaded.jsep.js '(application|text)/javascript'
 
           # And the negative case, which is the one that bit. /ort/ and /assets/ are
           # configured with `try_files $uri =404` precisely so a missing build artefact

@@ -15,6 +15,7 @@ import {
 } from "./questions";
 import { clearSession, defaultSession, hasSetAsideDraft, loadSession, saveSession } from "./persist";
 import { useLaya } from "./useLaya";
+import { webgpuAvailable } from "./laya/session";
 import type { Answer, QuestionTelemetry, Questions } from "./laya/types";
 import { AnswerCard } from "./ui/AnswerCard";
 import { LoadOverlay } from "./ui/LoadOverlay";
@@ -524,6 +525,9 @@ function ModelPicker({ value, onChange, busy }: {
   value: ModelId; onChange: (m: ModelId) => void; busy: boolean;
 }) {
   const spec = MODELS[value];
+  // Read once: navigator.gpu does not appear mid-session, and re-checking on every
+  // render would only invite the reader to think it might.
+  const [gpu] = useState(webgpuAvailable);
   return (
     <section className="card">
       <h2>0 · Model</h2>
@@ -535,12 +539,22 @@ function ModelPicker({ value, onChange, busy }: {
           onChange={(e) => onChange(e.target.value as ModelId)}
         >
           {Object.values(MODELS).map((m) => (
-            <option key={m.id} value={m.id}>{m.label}</option>
+            <option key={m.id} value={m.id} disabled={m.requiresWebGPU && !gpu}>
+              {m.label}{m.requiresWebGPU && !gpu ? " — unavailable here" : ""}
+            </option>
           ))}
         </select>
         {busy && <span className="muted">finish the run before switching</span>}
       </div>
       <div className="field-note">{spec.note}</div>
+      {!gpu && (
+        <div className="field-note">
+          This browser does not expose <code>navigator.gpu</code>, so the fp16 build is
+          greyed out. Running it on wasm instead would emulate half precision in software
+          at roughly 3.9 s per sequence, which is why it is refused rather than offered
+          as a slow option.
+        </div>
+      )}
       <div className="field-note">
         Questions run one at a time, on both builds. Laya answers a whole batch in one
         pass natively, but neither export here can: the English one refuses a batch
