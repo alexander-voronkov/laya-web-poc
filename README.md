@@ -161,16 +161,17 @@ It reports `crossOriginIsolated`, how long the weights took, the answers with th
 
 Three are selectable. They are not three qualities of the same thing; each trades a different axis, and the numbers below were measured here rather than quoted.
 
-| | English q8 | Multilingual int8 | Multilingual fp16 |
-| --- | --- | --- | --- |
-| backbone | ModernBERT-large 421M | mmBERT-base 322M | mmBERT-base 322M |
-| languages | English; fails on non-Latin script | 100+, cross-lingual works | 100+, cross-lingual works |
-| context | 512 trained | 1024 trained | 1024 trained |
-| download | 524 MB | 326 MB | 647 MB |
-| runs on | wasm, anywhere | wasm, anywhere | **WebGPU only** |
-| speed, one laptop | ~11 s at 512 tokens | **~220 ms at 303 tokens** | unmeasured |
-| fidelity vs fp32 | 100% argmax, 1.6 pp worst shift | **93.8% argmax, 16.9 pp worst shift** | exact by construction |
-| temperatures | fitted | **none, all 1.0** | none, all 1.0 |
+| | English q8 | **Specialised q8** | Multilingual int8 | Multilingual fp16 |
+| --- | --- | --- | --- | --- |
+| backbone | ModernBERT-large 421M | **ModernBERT-large 421M, fine-tuned** | mmBERT-base 322M | mmBERT-base 322M |
+| languages | English; fails on non-Latin script | English; same failure | 100+, cross-lingual works | 100+, cross-lingual works |
+| context | 512 trained | 1024 trained | 1024 trained | 1024 trained |
+| download | 524 MB | 524 MB | 326 MB | 647 MB |
+| runs on | wasm, anywhere | wasm, anywhere | wasm, anywhere | **WebGPU only** |
+| speed, one laptop | ~11 s at 512 tokens | unmeasured | **~220 ms at 303 tokens** | unmeasured |
+| fidelity vs fp32 | 100% argmax, 1.6 pp worst shift | **100% argmax, 0.9 pp worst shift** | **93.8% argmax, 16.9 pp worst shift** | exact by construction |
+| temperatures | fitted | fitted | **none, all 1.0** | none, all 1.0 |
+| typed-decisions accuracy | 0.362 | **0.766** | 0.342 | 0.342 |
 
 The fidelity row is the one that is easy to miss. The English build uses *weight-only* quantization: weights are compressed, activations stay fp32, and its published parity against the fp32 model is 100% argmax agreement with a worst probability shift of 0.0158. The multilingual int8 build uses *dynamic* quantization, which derives activation scales from the tensor at run time. Measured here on 16 questions across an English and a Russian text, against that same repository's own fp32 export: 15 of 16 argmax decisions agree, and the worst shift is **16.9 percentage points** — ten times the English build's — with one decision flipped outright. Its publisher's claim of "100% classification accuracy preserved" is a claim about the latency work, not something this measurement supports.
 

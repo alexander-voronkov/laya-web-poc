@@ -54,7 +54,7 @@ export interface ModelSpec {
   note: string;
 }
 
-export type ModelId = "english" | "multilingual" | "multilingual-fp16";
+export type ModelId = "english" | "typed-decisions" | "multilingual" | "multilingual-fp16";
 
 export const MODELS: Record<ModelId, ModelSpec> = {
   english: {
@@ -76,6 +76,35 @@ export const MODELS: Record<ModelId, ModelSpec> = {
       "Sharper on English than the multilingual build (MASSIVE 0.783 vs 0.657, XNLI 0.860 vs 0.843) " +
       "and its temperatures were actually fitted. Fails on non-Latin script while staying confident. " +
       "512-token context, 524 MB.",
+  },
+  "typed-decisions": {
+    id: "typed-decisions",
+    label: "English, specialised (typed-decisions, q8)",
+    backend: "wasm",
+    base: "https://huggingface.co/alfred361/laya-typed-decisions-web-q8/resolve/main/v1",
+    tokenizerPath: "",
+    layout: "split",
+    graphs: [
+      { name: "encoder_q8", externalData: true },
+      { name: "head_q8", externalData: true },
+    ],
+    cache: "laya-weights-td-v1",
+    nominalBytes: 524_100_000,
+    languages: "english",
+    // Weight-only, like the English base: activations stay fp32, so nothing couples
+    // the rows. Batching would very likely be exact here -- but the base build with the
+    // same quantization refused batch > 1 outright, so this waits on a measurement
+    // rather than an argument.
+    batchSafe: false,
+    note:
+      "The only checkpoint here that is actually good at this task. On typed decisions it " +
+      "scores 0.766 where the general checkpoints score 0.362 and 0.342 and the " +
+      "majority-class baseline is 0.461 — they are below the trivial answer, this one is " +
+      "well above it. Exported and verified here: 100% argmax agreement with fp32, worst " +
+      "probability shift 0.9 points. English only, 1024-token context, temperatures fitted. " +
+      "Its 0.766 was measured on the four workflows it was tuned for — invoices, security " +
+      "incidents, customer service, agent traces — so on questions shaped like something " +
+      "else, measure before trusting it.",
   },
   multilingual: {
     id: "multilingual",
