@@ -28,6 +28,12 @@ on:
         description: "Folder inside that repo, e.g. typed-decisions-fp16. Empty publishes v1/ at the root"
         default: ""
         required: false
+      block_size:
+        description: "q8 only: weights per shared scale. Smaller is more faithful and slightly larger"
+        type: choice
+        options: ["64", "32", "128"]
+        default: "64"
+        required: false
 
 jobs:
   export:
@@ -104,11 +110,6 @@ jobs:
           python make_fixtures.py
           python dump_golden.py
 
-      # The recipe exactly as nvkudva documents it. Weight-only on purpose: plain
-      # dynamic int8 collapses this architecture to 69% argmax agreement, because the
-      # damage is activation quantization rather than weight precision. Leaving
-      # activations in fp32 avoids that, and is also what would make the result
-      # batch-exact, unlike the dynamic-int8 multilingual build.
       # Writes out/encoder_fp32.onnx and out/head_fp32.onnx, which is why precision=fp32
       # needs no step of its own: both conversions below are skipped and everything
       # downstream already addresses the graphs as encoder_<precision>.onnx. The graph
@@ -122,13 +123,26 @@ jobs:
           python export_onnx.py
           ls -la out/
 
+      # The recipe exactly as nvkudva documents it. Weight-only on purpose: plain dynamic
+      # int8 collapses this architecture to 69% argmax agreement, because the damage is
+      # activation quantization rather than weight precision. Leaving activations in fp32
+      # avoids that -- and is the difference between this and the dynamic-int8
+      # multilingual build that drifts 16.9 points.
       - name: Quantize to int8
         if: ${{ inputs.precision == 'q8' }}
         working-directory: pipeline/export
+        env:
+          BLOCK: ${{ inputs.block_size }}
         run: |
           set -euo pipefail
-          python quantize_nbits.py --block-size 64 --out out/enc_nb8_bs64.onnx
-          python embed_fp16.py --src out/enc_nb8_bs64.onnx --out out/encoder_q8.onnx
+          # Block size is how many weights share one scale, so it is the dial between
+          # file size and quantization error. 64 is nvkudva's figure for ModernBERT-large
+          # and clears the gate there at max |dp| 0.0091. The multilingual encoder is a
+          # third smaller, each weight carries more of the function, and the same 64 came
+          # out at 0.0276 against a 0.02 gate -- every decision unchanged, one probability
+          # 2.8 points off. Halving the block halves the span each scale has to cover.
+          python quantize_nbits.py --block-size "${BLOCK}" --out out/enc_nb8.onnx
+          python embed_fp16.py --src out/enc_nb8.onnx --out out/encoder_q8.onnx
           python head_fp16_storage.py
           ls -la out/
 
