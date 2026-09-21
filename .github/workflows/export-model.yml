@@ -34,6 +34,10 @@ on:
         options: ["64", "32", "128"]
         default: "64"
         required: false
+      batch_trace:
+        description: "Re-trace with a real batch so the graph can answer several questions in one pass"
+        type: boolean
+        default: false
 
 jobs:
   export:
@@ -121,6 +125,19 @@ jobs:
         run: |
           set -euo pipefail
           python export_onnx.py
+          ls -la out/
+
+      # Overwrites the two graphs just written. Kept as a separate, opt-in step rather
+      # than folded into the one above: if a batched trace turns out to fail the parity
+      # gate on some checkpoint, the unbatched export is still one input away, and the
+      # difference between the two runs is one flag rather than a code change.
+      - name: Re-trace with a real batch
+        if: ${{ inputs.batch_trace }}
+        working-directory: pipeline/export
+        run: |
+          set -euo pipefail
+          cp $GITHUB_WORKSPACE/export/trace_batched.py .
+          python trace_batched.py
           ls -la out/
 
       # The recipe exactly as nvkudva documents it. Weight-only on purpose: plain dynamic
