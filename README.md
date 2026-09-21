@@ -168,7 +168,24 @@ These are properties of the base checkpoint, documented on its model card, not o
 - **`act_probability` is saturated** at 1.000 on this checkpoint and carries no signal.
 - **Near chance zero-shot on typed decisions** (0.362 against a 0.461 majority-class baseline). Laya is a fast base to specialise, not a zero-shot decision engine.
 - q8 weight-only quantisation, **wasm backend only**: WebGPU does not implement 8-bit `MatMulNBits`, so `onnxruntime-web/wasm` is imported instead of the default entry.
-- Two ONNX sessions are created once and reused; questions run sequentially, one forward pass (encoder + head) per question, on the main thread. Batching several questions saves the download, not the compute: the state is re-encoded per question, so cost grows linearly.
+- Two ONNX sessions are created once and reused; questions run sequentially, one forward pass (encoder + head) per question, on the main thread.
+
+### Why questions are not batched
+
+Laya answers a whole request in **one** forward pass — the reference `system_one` builds every sequence, pads them with `collate_items` and calls the model once with a batch dimension. That is where its published figures come from: 39.5 ms for one question, 158.6 ms for ten. Running them one at a time, as this port does, forfeits that.
+
+It was implemented and reverted, because **this ONNX export does not support a batch greater than 1**:
+
+```
+failed to call OrtRun(). ERROR_CODE: 1 ... element_wise_ops.h:583
+Attempting to broadcast an axis by a dimension other than 1. 153 by 459
+```
+
+459 is exactly 3 x 153 — three questions of 153 tokens. The export *declares* the batch axis dynamic (`dynamic_axes={"input_ids": {0: "b", ...}}` in the reference `export/export_onnx.py`), but declaring an axis dynamic only renames it: the traced graph still carries shape constants derived from the batch-1 example it was traced with. Checked and ruled out: ModernBERT unpadding, which would have explained it — the graph contains no `cu_seqlens` or `NonZero` ops at all.
+
+So batching needs the model re-exported with a batch>1 example and re-quantised, or a different export. The multilingual build ([`mizchi/laya-multilingual-onnx`](https://huggingface.co/mizchi/laya-multilingual-onnx)) comes from another toolchain and declares `[batch, sequence]` inputs; whether it honours them is untested here.
+
+The lesson is cheap to reuse: a speed change has to be proven not to be an answer change. The comparison harness that caught this ran the same questions with one pass per question and with batching, and diffed the rendered distributions — it failed on the first attempt, before anyone could believe the feature worked.
 
 ## Credits & license
 
