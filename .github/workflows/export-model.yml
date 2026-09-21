@@ -24,6 +24,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
+      # This repository, for export/batch_probe.py. The pipeline itself is cloned
+      # separately below; without this checkout the probe step cannot find its script,
+      # which is exactly how it failed the first time it ran.
+      - uses: actions/checkout@v4
+
       # Fail here rather than forty minutes in. The runner's disk is the tight one:
       # the checkpoint is ~850 MB, the fp32 graphs another ~1.7 GB, and the quantizer
       # holds a second copy while it writes.
