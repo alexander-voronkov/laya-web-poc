@@ -167,8 +167,11 @@ export const MODELS: Record<ModelId, ModelSpec> = {
       "0.342, which is below the 0.461 you get by always answering the most common " +
       "option: useful for seeing what the base model does and for questions unlike the " +
       "four workflows the tuned build was trained on, not for numbers you intend to act " +
-      "on. Ships with no fitted temperatures. Needs WebGPU, 647 MB — half the tuned " +
-      "build and a good deal quicker to download.",
+      "on. Ships with no fitted temperatures. Needs WebGPU, and is refused without it for " +
+      "accuracy as much as for speed: an independent Apple-native conversion of this same " +
+      "checkpoint measured half precision on a CPU drifting to 0.04, which is worse than " +
+      "the 0.024 of the int8 build offered in its place. 647 MB — half the tuned build and " +
+      "a good deal quicker to download.",
   },
   multilingual: {
     id: "multilingual",

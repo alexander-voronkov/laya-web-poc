@@ -281,9 +281,13 @@ export class LayaSession {
     // knowing an extension it need not know.
     const ortMod = await loadOrt(spec.backend);
     if (spec.requiresWebGPU && !webgpuAvailable()) {
-      // Refused rather than quietly run on wasm: fp16 emulated in software is ~3.9 s per
-      // sequence, and the fp32 build is four times the arithmetic again. That is not
-      // this feature being slower, it is a different experience wearing its name.
+      // Refused rather than quietly run on wasm, for two reasons and not only the
+      // obvious one. Speed: fp16 emulated in software is ~3.9 s per sequence, and the
+      // fp32 build is four times the arithmetic again. Accuracy: half precision on a
+      // CPU is also less faithful than the int8 build offered instead -- an independent
+      // Apple-native conversion of this same checkpoint measured fp16-on-CPU drifting to
+      // 0.04 at 1024 tokens, against 0.024 for our weight-only int8. So the fallback
+      // nobody would choose on purpose is worse on both counts than the one named below.
       //
       // The message names the one build that does run here, because "pick another
       // model" in front of a list where two of three are also refused is not help.
