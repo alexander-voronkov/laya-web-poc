@@ -15,7 +15,7 @@ on:
         default: convaiinnovations/laya-typed-decisions
         required: true
       precision:
-        description: "q8 = weight-only int8, runs on wasm anywhere. fp16 = half, needs WebGPU. fp32 = the traced graph untouched, needs WebGPU, twice the bytes and no conversion step"
+        description: "q8 = weight-only int8, runs on wasm anywhere. fp32 = the traced graph untouched, needs WebGPU. fp16 = half, but times out on a 421M encoder - see export/to_fp16.py"
         type: choice
         options: [q8, fp16, fp32]
         default: q8

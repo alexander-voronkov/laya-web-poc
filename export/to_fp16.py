@@ -61,12 +61,22 @@ def convert(src, out, block):
     #                       activations and the normalisation then divides by ~0
     #   Range/Cast          index arithmetic, which is not a quantity at all
     #
-    # disable_shape_infer=True is not an optimisation, it is what makes this finish.
-    # With inference on, the converter re-runs onnx.shape_inference over the whole graph,
-    # and on the 1.7 GB encoder that took more than 84 minutes without producing a file --
-    # the first attempt at this was killed by the job timeout mid-conversion. The shapes
-    # are not needed here: keep_io_types pins the boundary, and the block list decides the
-    # rest by op type, which is a property of the node rather than of its shape.
+    # THIS DOES NOT FINISH on a 421M encoder. Twice measured, and the second time was
+    # after a fix that did not work:
+    #
+    #   disable_shape_infer=False   84 minutes, killed by the 90-minute job timeout
+    #   disable_shape_infer=True    88 minutes, killed by the same timeout
+    #
+    # Shape inference was the obvious suspect and was the wrong one. The cost is the
+    # library's own traversal: pure-Python graph surgery over a 1.7 GB protobuf, and it
+    # does not get faster by being asked for less.
+    #
+    # Left in place rather than deleted because it is fine on a small graph, and because
+    # the next person to reach for it should find the measurement instead of repeating
+    # it. For a large encoder the answer is fp32 -- it needs no conversion at all, is the
+    # reference the other precisions are compared against, and costs only bytes. If fp16
+    # is ever actually needed at this size, halve the checkpoint before tracing rather
+    # than the graph afterwards.
     t = time.time()
     fp16 = float16.convert_float_to_float16(
         m, keep_io_types=True, disable_shape_infer=True, op_block_list=block)
