@@ -54,6 +54,19 @@ export interface ModelSpec {
   note: string;
 }
 
+/** Every build in one repository of ours, one folder per variant.
+ *
+ *  Three of the four came from other people's repositories, and the app fetched them
+ *  there directly. That is a dependency on those repositories staying put -- and worse,
+ *  on their contents staying the same, since a re-upload under an unchanged URL would
+ *  not break anything, it would quietly change what the page answers. The copies are
+ *  verified byte-for-byte by .github/workflows/mirror-models.yml; credits live in the
+ *  mirror's README and in NOTICE.
+ *
+ *  The tokenizer sits beside the graphs in every variant, so tokenizerPath is empty
+ *  throughout and the per-source layout differences stop at the mirror. */
+const MIRROR = "https://huggingface.co/alfred361/laya-web/resolve/main";
+
 export type ModelId = "english" | "typed-decisions" | "multilingual" | "multilingual-fp16";
 
 export const MODELS: Record<ModelId, ModelSpec> = {
@@ -61,7 +74,7 @@ export const MODELS: Record<ModelId, ModelSpec> = {
     id: "english",
     label: "English (ModernBERT-large, q8)",
     backend: "wasm",
-    base: "https://huggingface.co/nvkudva/laya-web-q8/resolve/main/v1",
+    base: MIRROR + "/english-q8/v1",
     tokenizerPath: "",
     layout: "split",
     graphs: [
@@ -81,7 +94,7 @@ export const MODELS: Record<ModelId, ModelSpec> = {
     id: "typed-decisions",
     label: "English, specialised (typed-decisions, q8)",
     backend: "wasm",
-    base: "https://huggingface.co/alfred361/laya-typed-decisions-web-q8/resolve/main/v1",
+    base: MIRROR + "/typed-decisions-q8/v1",
     tokenizerPath: "",
     layout: "split",
     graphs: [
@@ -112,8 +125,8 @@ export const MODELS: Record<ModelId, ModelSpec> = {
     id: "multilingual",
     label: "Multilingual (mmBERT-base, int8)",
     backend: "wasm",
-    base: "https://huggingface.co/soyelmismo/laya-multilingual-onnx/resolve/main",
-    tokenizerPath: "tokenizer",
+    base: MIRROR + "/multilingual-int8/v1",
+    tokenizerPath: "",
     layout: "single",
     graphs: [{ name: "model", externalData: false }],
     cache: "laya-weights-ml-int8-v1",
@@ -134,8 +147,8 @@ export const MODELS: Record<ModelId, ModelSpec> = {
     id: "multilingual-fp16",
     label: "Multilingual fp16 — WebGPU only (mmBERT-base)",
     backend: "webgpu",
-    base: "https://huggingface.co/mizchi/laya-multilingual-onnx/resolve/main",
-    tokenizerPath: "tokenizer",
+    base: MIRROR + "/multilingual-fp16/v1",
+    tokenizerPath: "",
     layout: "single",
     graphs: [{ name: "model", externalData: false }],
     cache: "laya-weights-ml-fp16-v1",
