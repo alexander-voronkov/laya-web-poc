@@ -163,14 +163,14 @@ No, and it was measured rather than reasoned about. Laya answers a whole request
 
 | | verdict | how it fails |
 | --- | --- | --- |
-| English q8 | **REFUSED** | broadcast error,  — 3 x 153 |
-| Specialised q8 | **REFUSED** | broadcast error,  — 8 x 70 |
+| English q8 | **REFUSED** | broadcast error, `153 by 459` — 3 x 153 |
+| Specialised q8 | **REFUSED** | broadcast error, `70 by 560` — 8 x 70 |
 | Multilingual int8 | **DRIFTS** | accepts the batch, answers differ by up to 21 points |
 | Multilingual fp16 | untested | nothing couples the rows in fp16, so it may work |
 
 The two ModernBERT exports bake a batch-1 constant even though the export script declares the batch axis dynamic — and the specialised one was traced with torch dynamo rather than TorchScript, which was the reason to expect it might differ. It did not. The multilingual int8 build does accept a batch, and that is worse: dynamic quantization derives activation scales per tensor, so a question's numbers depend on which others share the pass.
 
-The UI carries a questions-per-pass control anyway, defaulting to 1. It exists so the situation is visible rather than folklore, so a refusal names its cause instead of surfacing a raw broadcast error, and so the day an export can batch, nothing needs rebuilding.  runs on every export and prints REFUSED, DRIFTS or EQUIVALENT.
+The UI carries a questions-per-pass control anyway, defaulting to 1. It exists so the situation is visible rather than folklore, so a refusal names its cause instead of surfacing a raw broadcast error, and so the day an export can batch, nothing needs rebuilding. `export/batch_probe.py` runs on every export and prints REFUSED, DRIFTS or EQUIVALENT.
 
 ## Which checkpoint, and what each one costs
 
