@@ -54,7 +54,10 @@ jobs:
           set -euo pipefail
           python -m pip install -q --upgrade pip
           pip install -q torch --index-url https://download.pytorch.org/whl/cpu
-          pip install -q 'transformers>=5.0' safetensors onnx 'onnxruntime>=1.20' huggingface_hub numpy
+          # Exactly the set nvkudva documents. Reconstructing it from memory is how the
+          # first run died twenty minutes in on a missing onnxscript, which torch's
+          # dynamo exporter imports lazily and only when it is already tracing.
+          pip install -q 'transformers>=5.0' safetensors numpy onnx onnxscript onnxruntime huggingface_hub
           python - <<'PY'
           import transformers
           major = int(transformers.__version__.split(".")[0])
