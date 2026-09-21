@@ -1,15 +1,15 @@
 // Does the page answer with the model it names?
 //
-// This is the check that was missing. The four builds differ by architecture, tokenizer
-// and calibration, so their answers to the same question differ visibly — which means a
-// page serving the wrong one does not look broken, it looks like a different opinion.
+// This is the check that was missing. The builds differ in tuning, precision and
+// calibration, so their answers to the same question differ visibly — which means a page
+// serving the wrong one does not look broken, it looks like a different opinion.
 // It shipped that way: selecting multilingual-fp16 downloaded english-q8 in full,
 // english's boot resolved half a minute after the switch, and its callback wrote its own
 // session into state because the liveness guard was a ref shared across effect runs.
 // The page then answered with english under multilingual-fp16's name, to the decimal.
 //
 // Two assertions, and the first is the one that matters:
-//   1. every weight fetched belongs to the selected model, and none to any other
+//   1. every weight actually downloaded belongs to the selected model
 //   2. the answers differ from the default model's
 //
 // The second alone would not be enough — two models can agree by chance — and the first
@@ -42,15 +42,30 @@ const MODELS = (process.env.MODEL || "multilingual-fp16,multilingual").split(","
 
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 
-/** Load one model in a fresh profile, run the seeded questions, report what it fetched. */
+/** Load one model in a fresh profile, run the seeded questions, report the bytes. */
 async function runOne(browser, model) {
   const ctx = await browser.newContext({ viewport: { width: 1400, height: 1200 } });
   const page = await ctx.newPage();
-  const fetched = new Set();
+  // Bytes per variant folder, counted from finished responses only.
+  //
+  // Counting requests instead reports a false failure every time: the page boots the
+  // default model on mount, the switch arrives a second later, and the abandoned
+  // download leaves a request behind that was correctly cancelled. What matters is not
+  // whether another model's URL was touched, it is whether its weights were paid for --
+  // so this measures transferred bytes and calls anything under a megabyte the tail of
+  // a cancelled boot rather than a download.
+  const bytes = new Map();
   const errs = [];
-  page.on("request", (r) => {
-    const m = r.url().match(/\/laya-web\/resolve\/main\/([^/]+)\//);
-    if (m) fetched.add(m[1]);
+  const folderOf = (url) => (url.match(/\/laya-web\/resolve\/main\/([^/]+)\//) ?? [])[1];
+  page.on("requestfinished", async (r) => {
+    const folder = folderOf(r.url());
+    if (!folder) return;
+    try {
+      const sizes = await r.sizes();
+      bytes.set(folder, (bytes.get(folder) ?? 0) + (sizes.responseBodySize ?? 0));
+    } catch {
+      // The request outlived its context; the byte count is best-effort by nature.
+    }
   });
   page.on("pageerror", (e) => errs.push(String(e).slice(0, 200)));
 
@@ -68,7 +83,7 @@ async function runOne(browser, model) {
     await ctx.close();
     // A build that refuses is not a failure of this check: multilingual-fp16 says so
     // outright on a browser with no WebGPU, and saying so is correct behaviour.
-    return { model, refused: refusal, fetched: [...fetched] };
+    return { model, refused: refusal, bytes: Object.fromEntries(bytes) };
   }
   log(`  ${model}: loaded in ${Math.round((Date.now() - t0) / 1000)}s`);
 
@@ -83,7 +98,7 @@ async function runOne(browser, model) {
     [...document.querySelectorAll(".ans-card")].map((c) =>
       (c.querySelector(".noul-big") ?? c.querySelector(".ans-sub"))?.textContent?.trim()));
   await ctx.close();
-  return { model, answers, fetched: [...fetched], errs };
+  return { model, answers, bytes: Object.fromEntries(bytes), errs };
 }
 
 const browser = await chromium.launch({ args: ["--enable-unsafe-webgpu", "--enable-features=Vulkan"] });
@@ -114,13 +129,22 @@ try {
       console.log(`  refused, which is a valid outcome: ${r.refused}`);
       continue;
     }
-    const foreign = r.fetched.filter((f) => f !== FOLDER[model]);
+    // A megabyte is the line between "a cancelled boot left a few chunks behind" and
+    // "this page downloaded a model it was not asked for". The smallest real weight file
+    // here is the 34 MB tokenizer, so nothing legitimate lands between the two.
+    const STRAY_BYTES = 1_000_000;
+    const foreign = Object.entries(r.bytes)
+      .filter(([f, n]) => f !== FOLDER[model] && n > STRAY_BYTES)
+      .map(([f, n]) => `${f} (${(n / 1e6).toFixed(1)} MB)`);
     const sameAsBase = JSON.stringify(r.answers) === JSON.stringify(base.answers);
 
-    console.log(`  fetched from: ${r.fetched.join(", ") || "(nothing — served from cache?)"}`);
+    const summary = Object.entries(r.bytes)
+      .map(([f, n]) => `${f} ${(n / 1e6).toFixed(1)} MB`)
+      .join(", ");
+    console.log(`  downloaded: ${summary || "(nothing — served from cache?)"}`);
     console.log(`  answers: ${JSON.stringify(r.answers)}`);
     if (foreign.length) {
-      failures.push(`${model}: fetched another model's weights (${foreign.join(", ")})`);
+      failures.push(`${model}: downloaded another model's weights — ${foreign.join(", ")}`);
       console.log(`  FAIL — downloaded ${foreign.join(", ")}`);
     }
     if (sameAsBase) {
