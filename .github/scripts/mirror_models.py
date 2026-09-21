@@ -107,32 +107,13 @@ def main():
         print("::error::HF_TOKEN is not set", file=sys.stderr)
         return 1
 
-    readme = ["# Laya, packaged for the browser\n",
-              "Every build this project serves, in one place, so a demo does not depend on four "
-              "separate repositories staying where they are. Each folder is self-contained: the "
-              "graphs, the tokenizer that produced their token ids, and the config carrying the "
-              "sequence limits and temperatures.\n",
-              "All are Apache-2.0, as upstream. Credits are per variant below; none of the base "
-              "models are ours.\n",
-              "| folder | what it is |", "| --- | --- |"]
-    for folder, v in VARIANTS.items():
-        readme.append(f"| `{folder}/v1/` | {v['about']} |")
-    readme.append("\n## Credits\n")
-    for folder, v in VARIANTS.items():
-        readme.append(f"- **{folder}** — {v['credit']}")
-    readme.append(
-        "\nBase models: [convaiinnovations/laya](https://huggingface.co/convaiinnovations/laya) "
-        "and its family, by Nandakishor M / Convai Innovations.\n"
-        "\n## The `v1` segment\n\nBrowsers cache by URL. Re-quantizing publishes to `v2` rather "
-        "than overwriting `v1`, or a returning visitor keeps weights the app no longer believes "
-        "it is running.\n")
-    os.makedirs("out", exist_ok=True)
-    with open("out/README.md", "w", encoding="utf-8") as f:
-        f.write("\n".join(readme))
+    # The README is not written here. It describes every folder in the mirror, and this
+    # script knows only the ones it copies -- our own exports are published by
+    # export-model.yml and went missing from it within a day. One generator, in
+    # mirror_readme.py, which asserts that the folders it describes are exactly the
+    # folders that exist.
 
     api.create_repo(DEST, repo_type="model", exist_ok=True)
-    api.upload_file(path_or_fileobj="out/README.md", path_in_repo="README.md",
-                    repo_id=DEST, repo_type="model")
     for dest, (path, _, _) in sorted(staged.items()):
         print(f"  uploading {dest}")
         api.upload_file(path_or_fileobj=path, path_in_repo=dest, repo_id=DEST, repo_type="model")
