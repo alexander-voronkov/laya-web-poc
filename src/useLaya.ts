@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   LayaSession,
   cachedWeights,
@@ -29,14 +29,6 @@ interface Boot {
   session: LayaSession;
 }
 
-/** One boot per model, kept at module scope.
- *
- *  React 19 StrictMode mounts effects twice in development, and a second boot would
- *  mean a second few-hundred-megabyte download and a second session — on these models
- *  that is not a wasted render, it is an out-of-memory tab. Keyed by model id rather
- *  than a single slot, because switching models and switching back should not pay for
- *  the weights twice in one session.
- */
 const progressListeners = new Map<ModelId, ((p: LoadProgress) => void)[]>();
 const stageListeners = new Map<ModelId, ((s: LoadStage, ms: number) => void)[]>();
 // Replayed into late subscribers, so a remount does not show an empty progress list
@@ -104,10 +96,22 @@ export function useLaya(modelId: ModelId): LayaLoad & { retry: () => void } {
   const [stages, setStages] = useState<Partial<Record<LoadStage, number>>>({});
   const [cache, setCache] = useState<CacheState | null>(null);
   const [attempt, setAttempt] = useState(0);
-  const alive = useRef(true);
 
   useEffect(() => {
-    alive.current = true;
+    // Per effect run, deliberately not a ref.
+    //
+    // A ref is shared by every run: the cleanup sets it false and the next run sets it
+    // true again, so a callback left over from the *previous* model passes the check
+    // and writes its own session into state. That is not a cosmetic race. Measured on
+    // the deployed site: selecting multilingual-fp16 downloaded english-q8 in full,
+    // english's boot resolved half a minute later, and the page then answered with
+    // english while the picker, the metrics panel and the run record all said
+    // multilingual-fp16. Wrong answers under the right name are the one failure this
+    // app must not have.
+    //
+    // A local closure variable belongs to one run and one model, so a late callback
+    // from a superseded run can never satisfy it.
+    let current = true;
     // Switching models must not leave the previous one's numbers on screen: they would
     // read as this model's, and the two differ by hundreds of megabytes.
     setPhase("core");
@@ -127,11 +131,11 @@ export function useLaya(modelId: ModelId): LayaLoad & { retry: () => void } {
       pending = true;
       requestAnimationFrame(() => {
         pending = false;
-        if (alive.current) setFiles([...progressOf(spec.id).values()]);
+        if (current) setFiles([...progressOf(spec.id).values()]);
       });
     };
     const onStage = (s: LoadStage, ms: number) => {
-      if (!alive.current) return;
+      if (!current) return;
       setStages((prev) => ({ ...prev, [s]: ms }));
       if (s === "core") setPhase("weights");
     };
@@ -141,25 +145,25 @@ export function useLaya(modelId: ModelId): LayaLoad & { retry: () => void } {
     const held = boots.acquire(spec.id);
     held.promise.then(
       ({ core: c, session: s }) => {
-        if (!alive.current) return;
+        if (!current) return;
         setCore(c);
         setSession(s);
         setPhase("ready");
-        cachedWeights(spec).then((state) => { if (alive.current) setCache(state); });
+        cachedWeights(spec).then((state) => { if (current) setCache(state); });
       },
       (e: unknown) => {
         // An abandoned load is this component's own doing, not a fault to report --
         // and a live component should not reach here at all, since abandoning happens
         // only after its cleanup ran. Guarded anyway: were the bookkeeping ever wrong,
         // the symptom would be a permanent error screen for a model that is fine.
-        if (!alive.current || (e as Error)?.name === "AbortError") return;
+        if (!current || (e as Error)?.name === "AbortError") return;
         setError(String((e as Error)?.message ?? e));
         setPhase("error");
       },
     );
 
     return () => {
-      alive.current = false;
+      current = false;
       progressListeners.set(spec.id, listOf(progressListeners, spec.id).filter((l) => l !== onProgress));
       stageListeners.set(spec.id, listOf(stageListeners, spec.id).filter((l) => l !== onStage));
       held.release();

@@ -281,12 +281,16 @@ export class LayaSession {
     // knowing an extension it need not know.
     const ortMod = await loadOrt(spec.backend);
     if (spec.requiresWebGPU && !webgpuAvailable()) {
-      // Refused rather than quietly run on wasm: half precision emulated in software
-      // is ~3.9 s per sequence, which is not this feature being slower, it is a
-      // different experience wearing its name.
+      // Refused rather than quietly run on wasm: fp16 emulated in software is ~3.9 s per
+      // sequence, and the fp32 build is four times the arithmetic again. That is not
+      // this feature being slower, it is a different experience wearing its name.
+      //
+      // The message names the one build that does run here, because "pick another
+      // model" in front of a list where two of three are also refused is not help.
       throw new Error(
         "This build needs WebGPU, and this browser does not expose navigator.gpu. " +
-        "Pick one of the wasm models instead.",
+        "Pick \"Multilingual, general (int8)\" — it is the one build here that runs " +
+        "without a GPU.",
       );
     }
     if (import.meta.env.PROD) {
