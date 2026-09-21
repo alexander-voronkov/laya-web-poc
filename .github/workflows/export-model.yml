@@ -15,9 +15,9 @@ on:
         default: convaiinnovations/laya-typed-decisions
         required: true
       precision:
-        description: "q8 = weight-only int8, runs on wasm anywhere. fp16 = half precision, needs WebGPU but loses nothing"
+        description: "q8 = weight-only int8, runs on wasm anywhere. fp16 = half, needs WebGPU. fp32 = the traced graph untouched, needs WebGPU, twice the bytes and no conversion step"
         type: choice
-        options: [q8, fp16]
+        options: [q8, fp16, fp32]
         default: q8
         required: true
       push_to:
@@ -109,6 +109,12 @@ jobs:
       # damage is activation quantization rather than weight precision. Leaving
       # activations in fp32 avoids that, and is also what would make the result
       # batch-exact, unlike the dynamic-int8 multilingual build.
+      # Writes out/encoder_fp32.onnx and out/head_fp32.onnx, which is why precision=fp32
+      # needs no step of its own: both conversions below are skipped and everything
+      # downstream already addresses the graphs as encoder_<precision>.onnx. The graph
+      # that comes out of the tracer is the reference the other two are measured against,
+      # so shipping it is the one option that cannot lose anything -- it just costs twice
+      # the bytes of fp16 and needs a GPU to be worth running.
       - name: Export to fp32
         working-directory: pipeline/export
         run: |
