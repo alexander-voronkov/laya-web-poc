@@ -14,8 +14,18 @@ on:
         description: Hugging Face model id to export
         default: convaiinnovations/laya-typed-decisions
         required: true
+      precision:
+        description: "q8 = weight-only int8, runs on wasm anywhere. fp16 = half precision, needs WebGPU but loses nothing"
+        type: choice
+        options: [q8, fp16]
+        default: q8
+        required: true
       push_to:
         description: "Hub repo to publish to; leave empty to only produce an artifact"
+        default: ""
+        required: false
+      folder:
+        description: "Folder inside that repo, e.g. typed-decisions-fp16. Empty publishes v1/ at the root"
         default: ""
         required: false
 
@@ -62,7 +72,9 @@ jobs:
           # Exactly the set nvkudva documents. Reconstructing it from memory is how the
           # first run died twenty minutes in on a missing onnxscript, which torch's
           # dynamo exporter imports lazily and only when it is already tracing.
-          pip install -q 'transformers>=5.0' safetensors numpy onnx onnxscript onnxruntime huggingface_hub
+          # onnxconverter-common is ours, not nvkudva's: it carries the fp32->fp16 graph
+          # conversion the q8 recipe has no use for.
+          pip install -q 'transformers>=5.0' safetensors numpy onnx onnxscript onnxruntime huggingface_hub onnxconverter-common
           python - <<'PY'
           import transformers
           major = int(transformers.__version__.split(".")[0])
@@ -97,19 +109,46 @@ jobs:
       # damage is activation quantization rather than weight precision. Leaving
       # activations in fp32 avoids that, and is also what would make the result
       # batch-exact, unlike the dynamic-int8 multilingual build.
-      - name: Export and quantize
+      - name: Export to fp32
         working-directory: pipeline/export
         run: |
           set -euo pipefail
           python export_onnx.py
+          ls -la out/
+
+      - name: Quantize to int8
+        if: ${{ inputs.precision == 'q8' }}
+        working-directory: pipeline/export
+        run: |
+          set -euo pipefail
           python quantize_nbits.py --block-size 64 --out out/enc_nb8_bs64.onnx
           python embed_fp16.py --src out/enc_nb8_bs64.onnx --out out/encoder_q8.onnx
           python head_fp16_storage.py
           ls -la out/
 
+      # Half precision for real, not the fp16 *storage* the q8 build already uses: that
+      # one casts every weight back to fp32 before using it, so the arithmetic stays
+      # fp32 and it runs on wasm. This converts the arithmetic, which is what a WebGPU
+      # build is for -- and what makes it unusable on a CPU, where fp16 is emulated in
+      # software at seconds per sequence.
+      - name: Convert to fp16
+        if: ${{ inputs.precision == 'fp16' }}
+        working-directory: pipeline/export
+        run: |
+          set -euo pipefail
+          cp $GITHUB_WORKSPACE/export/to_fp16.py .
+          python to_fp16.py
+          ls -la out/
+
+      # The same gate for both: argmax >= 99%, max |dp| <= 0.02, mean KL <= 1e-3,
+      # measured against the PyTorch reference dumped above. fp16 is expected to clear
+      # it by a wide margin, which is a prediction, not a reason to skip the check --
+      # "expected to be exact" is how the first bad export shipped.
       - name: Verify against the fp32 reference
         working-directory: pipeline/export
-        run: python verify_onnx.py --encoder out/encoder_q8.onnx --head out/head_q8.onnx --gate
+        env:
+          SUF: ${{ inputs.precision }}
+        run: python verify_onnx.py --encoder "out/encoder_${SUF}.onnx" --head "out/head_${SUF}.onnx" --gate
 
       # Whether the result can answer several questions in one pass is a property of
       # the export, and two of the three builds this project has used got it wrong in
@@ -124,22 +163,36 @@ jobs:
       - name: Can it batch?
         continue-on-error: true
         working-directory: pipeline/export
+        env:
+          SUF: ${{ inputs.precision }}
         run: |
           cp $GITHUB_WORKSPACE/export/batch_probe.py .
-          python batch_probe.py --encoder out/encoder_q8.onnx --head out/head_q8.onnx
+          python batch_probe.py --encoder "out/encoder_${SUF}.onnx" --head "out/head_${SUF}.onnx"
 
+      # The layout the mirror uses: <folder>/v1/, self-contained. The tokenizer is
+      # flattened out of its tokenizer/ subdirectory here rather than in the app, so
+      # every variant has the same shape whatever its source looked like.
       - name: Assemble what the app fetches
         working-directory: pipeline/export
+        env:
+          SUF: ${{ inputs.precision }}
+          FOLDER: ${{ inputs.folder }}
         run: |
           set -euo pipefail
-          mkdir -p upload/v1
-          cp out/encoder_q8.onnx out/head_q8.onnx upload/v1/
-          # .data siblings exist only when the graph keeps weights externally.
-          for f in out/encoder_q8.onnx.data out/head_q8.onnx.data; do [ -f "$f" ] && cp "$f" upload/v1/; done
-          cp laya-en/rl_agent_config.json upload/v1/
-          cp laya-en/tokenizer/tokenizer.json laya-en/tokenizer/tokenizer_config.json upload/v1/
-          ls -la upload/v1
-          du -sh upload/v1
+          dest="upload${FOLDER:+/$FOLDER}/v1"
+          mkdir -p "$dest"
+          cp "out/encoder_${SUF}.onnx" "out/head_${SUF}.onnx" "$dest/"
+          # .data siblings exist only when the graph keeps weights externally. The
+          # `|| true` is not decoration: under `set -e` a loop whose last test fails
+          # takes the step down with it, and which of these exists depends on the
+          # precision.
+          for f in "out/encoder_${SUF}.onnx.data" "out/head_${SUF}.onnx.data"; do
+            { [ -f "$f" ] && cp "$f" "$dest/"; } || true
+          done
+          cp laya-en/rl_agent_config.json "$dest/"
+          cp laya-en/tokenizer/tokenizer.json laya-en/tokenizer/tokenizer_config.json "$dest/"
+          ls -la "$dest"
+          du -sh "$dest"
 
       - uses: actions/upload-artifact@v4
         with:
