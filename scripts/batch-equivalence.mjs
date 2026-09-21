@@ -25,13 +25,13 @@ async function run(page, url, label) {
   const t0 = Date.now();
   await page.evaluate(() => document.querySelector(".run-card button.btn.primary").click());
   await page.waitForFunction(
-    () => /done in|failed on/.test(document.querySelector(".run-card span")?.textContent ?? ""),
+    () => /done in|failed on/.test(document.querySelector(".run-card .run-status")?.textContent ?? ""),
     { timeout: 900_000 },
   );
   const wall = Date.now() - t0;
 
   const out = await page.evaluate(() => ({
-    status: document.querySelector(".run-card span")?.textContent?.trim(),
+    status: document.querySelector(".run-card .run-status")?.textContent?.trim(),
     passes: [...document.querySelectorAll(".metrics-rows .m-row")]
       .map((r) => r.textContent.replace(/\s+/g, " ").trim())
       .find((t) => t.startsWith("Forward passes")),

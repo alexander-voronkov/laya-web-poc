@@ -74,13 +74,19 @@ export interface LoadOptions {
   threads?: number;
   /** Skip the small-file fetches by passing a Core from loadCore(). */
   core?: Core;
+  /** Abandons the load: cancels the weight downloads in flight and releases any
+   *  session already built. Switching models while the first one is still coming down
+   *  otherwise pays for both, which on a phone is a few hundred megabytes of somebody
+   *  else's data for a model they navigated away from. */
+  signal?: AbortSignal;
 }
 
 
 
 /** Fetch with progress, backed by the Cache API so a reload does not re-download 524MB. */
-async function fetchCached(url: string, cacheName: string, onProgress?: (p: LoadProgress) => void): Promise<Uint8Array> {
+async function fetchCached(url: string, cacheName: string, onProgress?: (p: LoadProgress) => void, signal?: AbortSignal): Promise<Uint8Array> {
   const file = url.split("/").pop()!;
+  signal?.throwIfAborted();
   let cache: Cache | undefined;
   try {
     cache = await caches.open(cacheName);
@@ -93,7 +99,7 @@ async function fetchCached(url: string, cacheName: string, onProgress?: (p: Load
   } catch {
     // private mode / blocked storage: fall through and fetch without caching
   }
-  const res = await fetch(url);
+  const res = await fetch(url, { signal });
   if (!res.ok) throw new Error(`${url}: ${res.status}`);
   const total = Number(res.headers.get("content-length") ?? 0);
   const reader = res.body!.getReader();
@@ -198,16 +204,16 @@ export function jsHeapBytes(): number | null {
 
 /** Fetch rl_agent_config.json + tokenizer.json -- small enough to drive the live
  *  token counter before any weights are downloaded. */
-export async function loadCore(spec: ModelSpec): Promise<Core> {
+export async function loadCore(spec: ModelSpec, signal?: AbortSignal): Promise<Core> {
   const base = spec.base;
   const [cfg, tok] = await Promise.all([
     // r.json() on a 404 surfaces as "Unexpected token <", which sends the reader
     // looking for a parser bug instead of a wrong model base URL.
-    fetch(`${base}/rl_agent_config.json`).then((r) => {
+    fetch(`${base}/rl_agent_config.json`, { signal }).then((r) => {
       if (!r.ok) throw new Error(`${base}/rl_agent_config.json: ${r.status} ${r.statusText}`);
       return r.json() as Promise<LayaConfig>;
     }),
-    loadTokenizer(base, spec.tokenizerPath),
+    loadTokenizer(base, spec.tokenizerPath, signal),
   ]);
   return { cfg, tok };
 }
@@ -275,12 +281,16 @@ export class LayaSession {
     // knowing an extension it need not know.
     const ortMod = await loadOrt(spec.backend);
     if (spec.requiresWebGPU && !webgpuAvailable()) {
-      // Refused rather than quietly run on wasm: half precision emulated in software
-      // is ~3.9 s per sequence, which is not this feature being slower, it is a
-      // different experience wearing its name.
+      // Refused rather than quietly run on wasm: fp16 emulated in software is ~3.9 s per
+      // sequence, and the fp32 build is four times the arithmetic again. That is not
+      // this feature being slower, it is a different experience wearing its name.
+      //
+      // The message names the one build that does run here, because "pick another
+      // model" in front of a list where two of three are also refused is not help.
       throw new Error(
         "This build needs WebGPU, and this browser does not expose navigator.gpu. " +
-        "Pick one of the wasm models instead.",
+        "Pick \"Multilingual, general (int8)\" — it is the one build here that runs " +
+        "without a GPU.",
       );
     }
     if (import.meta.env.PROD) {
@@ -297,20 +307,24 @@ export class LayaSession {
     // (both a user-created worker and ORT's own env.wasm.proxy hang with no error after
     // the weights load). Inference blocks the UI for the length of one forward pass.
     let t0 = performance.now();
-    const core = opts.core ?? await loadCore(spec);
+    const core = opts.core ?? await loadCore(spec, opts.signal);
     opts.onStage?.("core", performance.now() - t0);
 
     let weightsMs = 0;
     const mk = async (g: { name: string; externalData: boolean }, stage: LoadStage): Promise<ort.InferenceSession> => {
       let t = performance.now();
-      const graph = await fetchCached(`${base}/${g.name}.onnx`, spec.cache, opts.onProgress);
+      const graph = await fetchCached(`${base}/${g.name}.onnx`, spec.cache, opts.onProgress, opts.signal);
       // The English build keeps its weights in a sibling .onnx.data; the multilingual
       // one carries them inline, and asking for a .data that does not exist would 404.
       const data = g.externalData
-        ? await fetchCached(`${base}/${g.name}.onnx.data`, spec.cache, opts.onProgress)
+        ? await fetchCached(`${base}/${g.name}.onnx.data`, spec.cache, opts.onProgress, opts.signal)
         : null;
       weightsMs += performance.now() - t;
       t = performance.now();
+      // Building the session is the one step that cannot be interrupted: it hands the
+      // weights to wasm and comes back hundreds of megabytes heavier. Checked here so
+      // an abort that arrived during the download does not pay for it anyway.
+      opts.signal?.throwIfAborted();
       const s = await ortMod.InferenceSession.create(graph, {
         executionProviders: spec.backend === "webgpu" ? ["webgpu", "wasm"] : ["wasm"],
         // onnxruntime-web 1.30 needs this on WebGPU for the fp16 graph; the author of
@@ -333,8 +347,12 @@ export class LayaSession {
     try {
       enc = partial = await mk(spec.graphs[0], "encoder-init");
       if (spec.layout === "split") head = await mk(spec.graphs[1], "head-init");
+      // An abort between the last create() and the return would otherwise hand back a
+      // session nobody holds a reference to, which is the leak this whole block exists
+      // to prevent -- the same release path, just for a cancellation instead of a fault.
+      opts.signal?.throwIfAborted();
     } catch (e) {
-      await Promise.allSettled([partial?.release()]);
+      await Promise.allSettled([partial?.release(), head?.release()]);
       throw e;
     }
     opts.onStage?.("weights", weightsMs);

@@ -16,7 +16,7 @@ import {
 import { clearSession, defaultSession, hasSetAsideDraft, loadSession, saveSession } from "./persist";
 import { useLaya } from "./useLaya";
 import { webgpuAvailable } from "./laya/session";
-import type { Answer, QuestionTelemetry, Questions } from "./laya/types";
+import type { Answer, LayaConfig, QuestionTelemetry, Questions } from "./laya/types";
 import { AnswerCard } from "./ui/AnswerCard";
 import { LoadOverlay } from "./ui/LoadOverlay";
 import { MetricsPanel } from "./ui/MetricsPanel";
@@ -24,6 +24,37 @@ import { QuestionCard } from "./ui/QuestionEditor";
 import { sec } from "./format";
 
 const BUDGETS = [512, 1024, 2048, 4096, 8192];
+
+/** What the loaded checkpoint's temperatures say about trusting its numbers.
+ *
+ *  Temperature is the divisor between the model's raw scores and the percentages on
+ *  screen, so it is the difference between a probability and an ordering. Three states
+ *  are worth telling apart, and a checkpoint announces which it is in its own config:
+ *
+ *  - all 1.0 and no per-option map: nothing was fitted, so the numbers rank the options
+ *    and mean little beyond that;
+ *  - a per-option map: it wins over the per-type array wherever a bucket matches, which
+ *    is how a fine-tuned checkpoint can end up scaled by the temperatures of the base it
+ *    came from -- laya-typed-decisions ships exactly that, and its own card says so;
+ *  - fitted per-type values and no map: fitted for this checkpoint, nothing overriding.
+ */
+function describeCalibration(cfg: LayaConfig | null): string {
+  if (!cfg) return "not known yet — the config has not loaded";
+  const buckets = Object.keys(cfg.temperature_by_options ?? {});
+  const t = cfg.temperature ?? [];
+  const fitted = t.some((v) => Math.abs(v - 1) > 1e-6);
+  if (buckets.length) {
+    return `temperature_by_options is set for ${buckets.length} buckets (${buckets.join(", ")}) ` +
+      "and overrides the per-type temperatures wherever it matches; if this checkpoint was " +
+      "fine-tuned, check that map belongs to it rather than to the model it came from";
+  }
+  if (!fitted) {
+    return "no temperatures were fitted — all 1.0 and no per-option map; read the " +
+      "probabilities as an ordering rather than as frequencies";
+  }
+  return `temperatures fitted for this checkpoint (${t.map((v) => v.toFixed(3)).join(", ")} ` +
+    "by question type) with nothing overriding them";
+}
 
 interface Landed {
   question: QuestionItem;
@@ -197,9 +228,12 @@ export default function App() {
         maxLenChosenAutomatically: maxLen === null,
         trainedMaxLen: laya.core?.cfg.max_len ?? null,
         headMaxLen: laya.core?.cfg.head_max_len ?? null,
-        calibration: laya.spec.languages === "multilingual"
-          ? "this checkpoint ships with no fitted temperatures at all — all 1.0, temperature_by_options empty; read the probabilities as an ordering"
-          : "temperatures were fitted by the original author on the fp32 model and not refitted after quantisation; read the probabilities as an ordering, not as frequencies",
+        // Read off the config this run actually loaded rather than keyed to the model,
+        // because the claim is about calibration and calibration is exactly what a
+        // hardcoded sentence gets wrong: the line here used to say "no fitted
+        // temperatures at all" for every multilingual build, which stopped being true
+        // the moment one of them was fine-tuned with its temperatures refitted.
+        calibration: describeCalibration(laya.core?.cfg ?? null),
         languages: laya.spec.languages,
         // Recorded because it is the reason a run has one forward pass per question.
         batchSafe: laya.spec.batchSafe,
