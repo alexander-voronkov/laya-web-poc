@@ -296,44 +296,88 @@ export function seedQuestions(): { questions: QuestionItem[]; counter: number } 
     ...p,
   });
   return {
-    counter: 3,
+    counter: 5,
     questions: [
       q({
-        id: "q1",
-        type: "noul",
-        text: "Does the narrator's account contradict itself?",
-        criteriaTrue: "yes, the text undercuts its own claims",
-        criteriaFalse: "no, the account is internally consistent",
-      }),
-      q({
-        id: "q2",
+        id: "category",
         type: "choice",
-        text: "Which register dominates the passage?",
+        text: "What is this customer conversation primarily about?",
         options: [
-          { label: "ironic", description: "the tone undercuts what is stated" },
-          { label: "earnest", description: "the tone supports what is stated" },
-          { label: "clinical", description: "detached, without evaluation" },
+          { label: "billing", description: "a charge, invoice, subscription or payment problem" },
+          { label: "delivery", description: "shipping, fulfilment or delivery of a physical item" },
+          { label: "technical", description: "the product or service is not working as expected" },
+          { label: "account", description: "login, plan changes, profile or access management" },
+          { label: "refund", description: "the customer is explicitly asking for money back" },
         ],
       }),
       q({
-        id: "q3",
+        id: "needs_human",
+        type: "noul",
+        text: "This conversation requires a human agent rather than automated handling.",
+        criteriaTrue: "a human must take over: judgement, authority or empathy is required",
+        criteriaFalse: "automation can carry this to resolution",
+      }),
+      q({
+        id: "churn_risk",
         type: "score",
-        text: "How strongly does the passage commit to its central claim?",
+        text: "How likely is this customer to stop doing business with us after this?",
         levels: [
-          { label: "hedged", description: "qualified throughout" },
-          { label: "measured", description: "asserted with caveats" },
-          { label: "emphatic", description: "asserted without reservation" },
+          { label: "none", description: "no sign of dissatisfaction" },
+          { label: "mild", description: "some frustration, but the relationship is intact" },
+          { label: "clear", description: "clearly unhappy; repeat problems or explicit complaints" },
+          { label: "imminent", description: "threatening to cancel, dispute or leave" },
+        ],
+      }),
+      q({
+        id: "urgency",
+        type: "score",
+        text: "How time-sensitive is this conversation?",
+        levels: [
+          { label: "none", description: "no time pressure; can wait indefinitely" },
+          { label: "routine", description: "handle within the normal queue" },
+          { label: "elevated", description: "should be handled within the same week" },
+          { label: "critical", description: "requires action within the same day" },
+        ],
+      }),
+      q({
+        id: "action",
+        type: "choice",
+        text: "What should the assistant do next with this conversation?",
+        options: [
+          { label: "answer_directly", description: "resolvable with information already to hand" },
+          { label: "request_information", description: "more detail is needed from the customer first" },
+          { label: "execute_refund", description: "issue the refund or credit the customer is owed" },
+          { label: "escalate_to_human", description: "hand off to a human agent with the authority to act" },
+          { label: "close_no_action", description: "no further action is warranted; the matter is settled" },
         ],
       }),
     ],
   };
 }
 
-export const SEED_TASK = "Read the text as a literary critic.";
+export const SEED_TASK =
+  "You are triaging an inbound support conversation. Decide how it should be handled.";
 
+/** A support thread in Russian, with the questions above in English.
+ *
+ *  Both halves of that are deliberate. The questions are the ones from the customer
+ *  service workflow this checkpoint was fine-tuned on, near enough word for word, so the
+ *  page opens on the model's own ground rather than on a task it was never trained for.
+ *  The conversation is in Russian because a text in one language and questions in
+ *  another is the thing this multilingual build exists to do, and a demo that only ever
+ *  shows English never demonstrates it.
+ *
+ *  The thread is written to have an answer rather than to be hard: a paid customer,
+ *  three weeks of a broken integration, two tickets already, and a sentence about the
+ *  renewal. Churn risk and urgency should come out high and say so, which is what a
+ *  calibrated model looks like when it is asked something it knows. */
 export const SEED_TEXT =
-  "I have never, in all my years at the firm, seen a proposal handled with such care. " +
-  "Every figure was checked twice, and the committee — men of unimpeachable judgement, " +
-  "as they are so often described, not least by themselves — approved it in under nine minutes. " +
-  "I am told the earlier version, the one I drafted, contained an error. I do not recall the error. " +
-  "I recall only that it was mine, and that this was said to settle the matter.";
+  "Клиент: Здравствуйте. Уже третью неделю не проходит выгрузка заказов через ваш API — " +
+  "падает с 500-й ошибкой примерно на каждой десятой партии. Писал дважды, первый тикет " +
+  "закрыли без ответа, по второму попросили подождать.\n" +
+  "Поддержка: Добрый день! Подскажите, пожалуйста, идентификатор интеграции — проверим логи.\n" +
+  "Клиент: Отправлял его в обоих тикетах. Могу ещё раз, но, честно говоря, у нас через " +
+  "две недели продление, и руководство уже спрашивает, зачем мы за это платим. " +
+  "Хотелось бы понимать, чинится это вообще или нам искать замену.\n" +
+  "\n" +
+  "Аккаунт: тариф Business, 14 месяцев с нами, 18 рабочих мест, 2 обращения за 90 дней.";
