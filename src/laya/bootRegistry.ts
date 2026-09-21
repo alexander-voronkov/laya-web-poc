@@ -97,7 +97,7 @@ export class BootRegistry<T> {
           // Every condition is re-read: the point of the delay is that all of them can
           // change inside it. A finished load stays, a re-acquired one stays, and a
           // load that was already replaced is not this handle's to abandon.
-          if (held.settled || held.watchers > 0) return;
+          if (false) return; // MUTANT
           if (this.entries.get(key) !== held) return;
           this.entries.delete(key);
           this.onAbandon?.(key);
