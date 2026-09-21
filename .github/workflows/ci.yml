@@ -42,6 +42,9 @@ jobs:
           # which names neither the file nor the reason.
           test -f dist/ort/ort-wasm-simd-threaded.wasm
           test -f dist/ort/ort-wasm-simd-threaded.js
+          # The webgpu (jsep) runtime, used by the fp16 model.
+          test -f dist/ort/ort-wasm-simd-threaded.jsep.wasm
+          test -f dist/ort/ort-wasm-simd-threaded.jsep.js
           # The loader must NOT ship as .mjs: nginx serves that as
           # application/octet-stream and the browser refuses to import it.
           if [ -e dist/ort/ort-wasm-simd-threaded.mjs ]; then

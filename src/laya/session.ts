@@ -5,7 +5,39 @@
 // on the instance. The inference path (systemOne) is a verbatim port.
 // wasm-only entry: the default entry drags in the jsep runtime, whose .wasm is 28.3MB.
 // We only ever use the wasm EP (WebGPU does not implement 8-bit MatMulNBits anyway).
-import * as ort from "onnxruntime-web/wasm";
+import type * as ort from "onnxruntime-web/wasm";
+
+/** The onnxruntime-web entry to use, loaded on demand.
+ *
+ *  The two entries are different modules with their own env and their own backend
+ *  registry, and a Tensor from one is not interchangeable with a session from the
+ *  other -- so whichever is loaded for a model has to be the one that builds its
+ *  tensors, which is why the session carries it rather than importing it at the top.
+ *
+ *  The wasm entry is ~14 MB of runtime; the webgpu (jsep) entry is roughly twice that.
+ *  Importing it dynamically keeps that off every visitor who never picks an fp16
+ *  model. */
+export type OrtModule = typeof import("onnxruntime-web/wasm");
+
+const ortModules = new Map<string, Promise<OrtModule>>();
+
+function loadOrt(backend: "wasm" | "webgpu"): Promise<OrtModule> {
+  const existing = ortModules.get(backend);
+  if (existing) return existing;
+  const p = (backend === "webgpu"
+    ? import("onnxruntime-web/webgpu")
+    : import("onnxruntime-web/wasm")) as Promise<OrtModule>;
+  ortModules.set(backend, p);
+  p.catch(() => ortModules.delete(backend));
+  return p;
+}
+
+/** WebGPU is a hard requirement for the fp16 build, not a preference: without it ONNX
+ *  Runtime emulates half precision in software at roughly 3.9 s per sequence, which is
+ *  not a slower version of the feature but a different product. */
+export function webgpuAvailable(): boolean {
+  return typeof navigator !== "undefined" && "gpu" in navigator;
+}
 import { buildSequence, renderOptions, toInternal, type Tok } from "./sequence";
 import { formatAnswer, softmax, tempBucket, temperatureFor } from "./postprocess";
 import { loadTokenizer } from "./tokenizer";
@@ -201,12 +233,15 @@ export class LayaSession {
   readonly numThreads: number;
   readonly hardwareConcurrency: number;
   readonly spec: ModelSpec;
+  /** The module that created these sessions; its Tensor is the only one they accept. */
+  private ort: OrtModule;
   private tok: Tok;
   /** : encoder then head. : one graph,  unused. */
   private enc: ort.InferenceSession;
   private head: ort.InferenceSession | null;
 
-  private constructor(spec: ModelSpec, cfg: LayaConfig, tok: Tok, enc: ort.InferenceSession, head: ort.InferenceSession | null, requestedThreads: number) {
+  private constructor(ortMod: OrtModule, spec: ModelSpec, cfg: LayaConfig, tok: Tok, enc: ort.InferenceSession, head: ort.InferenceSession | null, requestedThreads: number) {
+    this.ort = ortMod;
     this.spec = spec;
     this.cfg = cfg;
     this.maxLen = cfg.max_len;
@@ -232,14 +267,26 @@ export class LayaSession {
     // found" -- naming neither the file nor the reason. scripts/copy-ort.mjs writes
     // the loader as .js for exactly this, so the app does not depend on the host
     // knowing an extension it need not know.
+    const ortMod = await loadOrt(spec.backend);
+    if (spec.requiresWebGPU && !webgpuAvailable()) {
+      // Refused rather than quietly run on wasm: half precision emulated in software
+      // is ~3.9 s per sequence, which is not this feature being slower, it is a
+      // different experience wearing its name.
+      throw new Error(
+        "This build needs WebGPU, and this browser does not expose navigator.gpu. " +
+        "Pick one of the wasm models instead.",
+      );
+    }
     if (import.meta.env.PROD) {
-      ort.env.wasm.wasmPaths = {
-        wasm: "/ort/ort-wasm-simd-threaded.wasm",
-        mjs: "/ort/ort-wasm-simd-threaded.js",
-      };
+      // Per backend: the webgpu entry loads the jsep runtime, a different pair of
+      // files. Because these are explicit paths rather than a prefix, pointing the
+      // webgpu module at the plain runtime would hand it the wrong binary -- and ORT
+      // reports that as "no available backend found", naming nothing.
+      const stem = spec.backend === "webgpu" ? "ort-wasm-simd-threaded.jsep" : "ort-wasm-simd-threaded";
+      ortMod.env.wasm.wasmPaths = { wasm: `/ort/${stem}.wasm`, mjs: `/ort/${stem}.js` };
     }
     const threads = opts.threads ?? Math.min(navigator.hardwareConcurrency || 4, 8);
-    ort.env.wasm.numThreads = threads;
+    ortMod.env.wasm.numThreads = threads;
     // Main thread, no proxy: threaded wasm initialises only there in a production bundle
     // (both a user-created worker and ORT's own env.wasm.proxy hang with no error after
     // the weights load). Inference blocks the UI for the length of one forward pass.
@@ -258,8 +305,11 @@ export class LayaSession {
         : null;
       weightsMs += performance.now() - t;
       t = performance.now();
-      const s = await ort.InferenceSession.create(graph, {
-        executionProviders: ["wasm"],
+      const s = await ortMod.InferenceSession.create(graph, {
+        executionProviders: spec.backend === "webgpu" ? ["webgpu", "wasm"] : ["wasm"],
+        // onnxruntime-web 1.30 needs this on WebGPU for the fp16 graph; the author of
+        // the export says so and there is no reason to find out the hard way.
+        ...(spec.backend === "webgpu" ? { graphOptimizationLevel: "basic" as const } : {}),
         ...(data ? { externalData: [{ data, path: `${g.name}.onnx.data` }] } : {}),
       });
       opts.onStage?.(stage, performance.now() - t);
@@ -282,7 +332,7 @@ export class LayaSession {
       throw e;
     }
     opts.onStage?.("weights", weightsMs);
-    return new LayaSession(spec, core.cfg, core.tok, enc, head, threads);
+    return new LayaSession(ortMod, spec, core.cfg, core.tok, enc, head, threads);
   }
 
   /** questions: {id: {type, instructions, criteria}} -- the Jev request shape.
@@ -316,11 +366,11 @@ export class LayaSession {
       }
       const buildMs = performance.now() - qt0;
       const L = ids.length;
-      const att = new ort.Tensor("int64", new BigInt64Array(L).fill(1n), [1, L]);
-      const inputIds = new ort.Tensor("int64", BigInt64Array.from(ids, (x) => BigInt(x)), [1, L]);
-      const markerPos = new ort.Tensor("int64", BigInt64Array.from(markers, (x) => BigInt(x)), [1, markers.length]);
-      const markerMask = new ort.Tensor("bool", new Uint8Array(markers.length).fill(1), [1, markers.length]);
-      const qtypeT = new ort.Tensor("int64", BigInt64Array.from([QTYPES[q.t]], (x) => BigInt(x)), [1]);
+      const att = new this.ort.Tensor("int64", new BigInt64Array(L).fill(1n), [1, L]);
+      const inputIds = new this.ort.Tensor("int64", BigInt64Array.from(ids, (x) => BigInt(x)), [1, L]);
+      const markerPos = new this.ort.Tensor("int64", BigInt64Array.from(markers, (x) => BigInt(x)), [1, markers.length]);
+      const markerMask = new this.ort.Tensor("bool", new Uint8Array(markers.length).fill(1), [1, markers.length]);
+      const qtypeT = new this.ort.Tensor("int64", BigInt64Array.from([QTYPES[q.t]], (x) => BigInt(x)), [1]);
 
       // Two shapes of the same model. The English build ships the encoder and the
       // decision head as separate graphs, so the hidden state crosses between two
