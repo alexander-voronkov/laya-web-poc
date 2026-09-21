@@ -56,9 +56,21 @@ async function runOne(browser, model) {
   // a cancelled boot rather than a download.
   const bytes = new Map();
   const errs = [];
-  const folderOf = (url) => (url.match(/\/laya-web\/resolve\/main\/([^/]+)\//) ?? [])[1];
+  // The folder is on the *first* URL of a redirect chain, not the last. The Hub answers
+  // /laya-web/resolve/main/<folder>/<file> with a redirect to a CDN host whose path says
+  // nothing about which variant it belongs to, and the bytes arrive on that second
+  // request. Matching only the URL that finished therefore attributed every download to
+  // nothing at all, and the check reported a clean run having measured zero -- which is
+  // the failure mode this file's own comments warn about, walked into while writing them.
+  const folderOf = (req) => {
+    for (let r = req; r; r = r.redirectedFrom()) {
+      const m = r.url().match(/\/laya-web\/resolve\/main\/([^/]+)\//);
+      if (m) return m[1];
+    }
+    return undefined;
+  };
   page.on("requestfinished", async (r) => {
-    const folder = folderOf(r.url());
+    const folder = folderOf(r);
     if (!folder) return;
     try {
       const sizes = await r.sizes();
@@ -133,9 +145,19 @@ try {
     // "this page downloaded a model it was not asked for". The smallest real weight file
     // here is the 34 MB tokenizer, so nothing legitimate lands between the two.
     const STRAY_BYTES = 1_000_000;
+    const own = r.bytes[FOLDER[model]] ?? 0;
     const foreign = Object.entries(r.bytes)
       .filter(([f, n]) => f !== FOLDER[model] && n > STRAY_BYTES)
       .map(([f, n]) => `${f} (${(n / 1e6).toFixed(1)} MB)`);
+    // Before believing "no foreign bytes", prove the meter works. A model that loaded
+    // from an empty cache must show most of itself arriving; if it shows nothing, the
+    // accounting is broken and a clean result means only that nothing was counted.
+    const EXPECT_OWN_BYTES = 50_000_000;
+    if (own < EXPECT_OWN_BYTES) {
+      failures.push(`${model}: only ${(own / 1e6).toFixed(1)} MB attributed to its own weights — ` +
+        "the byte accounting is not working, so this run proves nothing");
+      console.log(`  FAIL — measured ${(own / 1e6).toFixed(1)} MB of its own weights; the meter is broken`);
+    }
     const sameAsBase = JSON.stringify(r.answers) === JSON.stringify(base.answers);
 
     const summary = Object.entries(r.bytes)
