@@ -157,6 +157,21 @@ SITE=http://localhost:4173 node scripts/smoke.mjs --local   # against a preview 
 
 It reports `crossOriginIsolated`, how long the weights took, the answers with their distributions, the whole metrics panel, the per-question table, and any console error or failed request. Two screenshots land next to it.
 
+## Can any of them batch?
+
+No, and it was measured rather than reasoned about. Laya answers a whole request in one forward pass natively — 39.5 ms for one question against 158.6 ms for ten — and none of the exports here can:
+
+| | verdict | how it fails |
+| --- | --- | --- |
+| English q8 | **REFUSED** | broadcast error,  — 3 x 153 |
+| Specialised q8 | **REFUSED** | broadcast error,  — 8 x 70 |
+| Multilingual int8 | **DRIFTS** | accepts the batch, answers differ by up to 21 points |
+| Multilingual fp16 | untested | nothing couples the rows in fp16, so it may work |
+
+The two ModernBERT exports bake a batch-1 constant even though the export script declares the batch axis dynamic — and the specialised one was traced with torch dynamo rather than TorchScript, which was the reason to expect it might differ. It did not. The multilingual int8 build does accept a batch, and that is worse: dynamic quantization derives activation scales per tensor, so a question's numbers depend on which others share the pass.
+
+The UI carries a questions-per-pass control anyway, defaulting to 1. It exists so the situation is visible rather than folklore, so a refusal names its cause instead of surfacing a raw broadcast error, and so the day an export can batch, nothing needs rebuilding.  runs on every export and prints REFUSED, DRIFTS or EQUIVALENT.
+
 ## Which checkpoint, and what each one costs
 
 Three are selectable. They are not three qualities of the same thing; each trades a different axis, and the numbers below were measured here rather than quoted.

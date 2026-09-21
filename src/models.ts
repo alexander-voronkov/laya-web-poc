@@ -91,10 +91,12 @@ export const MODELS: Record<ModelId, ModelSpec> = {
     cache: "laya-weights-td-v1",
     nominalBytes: 524_100_000,
     languages: "english",
-    // Weight-only, like the English base: activations stay fp32, so nothing couples
-    // the rows. Batching would very likely be exact here -- but the base build with the
-    // same quantization refused batch > 1 outright, so this waits on a measurement
-    // rather than an argument.
+    // Measured, not assumed, and the assumption was wrong. Weight-only quantization
+    // leaves activations in fp32 so nothing couples the rows, and this export used
+    // torch dynamo rather than TorchScript -- both reasons to expect batching to work.
+    // It does not: batch of 8 fails with "Attempting to broadcast an axis by a
+    // dimension other than 1. 70 by 560", where 560 is 8 x 70. The ModernBERT export
+    // bakes a batch-1 constant whichever exporter traces it.
     batchSafe: false,
     note:
       "The only checkpoint here that is actually good at this task. On typed decisions it " +
