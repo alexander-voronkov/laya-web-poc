@@ -396,28 +396,33 @@ export default function App() {
           </section>
 
           <section className="card run-card">
-            <button
-              className="btn primary"
-              disabled={running || laya.phase !== "ready" || !questions.length || blockers > 0}
-              onClick={doRun}
-            >
-              Get answers
-            </button>
-            {running && <button className="btn" onClick={() => abortRef.current?.abort()}>Stop</button>}
+            {/* Two rows, not one. On a single row the select, its warning and the status
+                all compete for the same width, and every one of them loses: the status
+                wraps one word per line and the warning pushes the button off centre. */}
+            <div className="run-row">
+              <button
+                className="btn primary"
+                disabled={running || laya.phase !== "ready" || !questions.length || blockers > 0}
+                onClick={doRun}
+              >
+                Get answers
+              </button>
+              {running && <button className="btn" onClick={() => abortRef.current?.abort()}>Stop</button>}
+              <span className={`run-status muted${status?.error ? " error" : ""}`}>
+                {status?.text ??
+                  (laya.phase !== "ready"
+                    ? "the model is loading…"
+                    : blockers > 0
+                      ? `${blockers} question${blockers === 1 ? "" : "s"} need fixing — see the cards above`
+                      : "the model is ready")}
+              </span>
+            </div>
             <BatchPicker
               value={batchSize}
               safe={laya.spec.batchSafe}
               disabled={running}
               onChange={(v) => patch({ batchSize: v })}
             />
-            <span className={`muted${status?.error ? " error" : ""}`}>
-              {status?.text ??
-                (laya.phase !== "ready"
-                  ? "the model is loading…"
-                  : blockers > 0
-                    ? `${blockers} question${blockers === 1 ? "" : "s"} need fixing — see the cards above`
-                    : "the model is ready")}
-            </span>
           </section>
 
           {(shown.length > 0 || running) && (
@@ -457,12 +462,7 @@ export default function App() {
         </main>
 
         <footer>
-          <p>
-            Built on <a href="https://github.com/nvkudva/laya-web" target="_blank" rel="noreferrer">nvkudva/laya-web</a>{" "}
-            (the runtime port) and the weights <a href="https://huggingface.co/nvkudva/laya-web-q8" target="_blank" rel="noreferrer">nvkudva/laya-web-q8</a>{" "}
-            · base model <a href="https://huggingface.co/convaiinnovations/laya" target="_blank" rel="noreferrer">convaiinnovations/laya</a>{" "}
-            · Apache-2.0
-          </p>
+          <p>Alexander Voronkov 2026</p>
         </footer>
       </div>
 

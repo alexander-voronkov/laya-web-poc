@@ -159,14 +159,16 @@ It reports `crossOriginIsolated`, how long the weights took, the answers with th
 
 ## Can any of them batch?
 
-No, and it was measured rather than reasoned about. Laya answers a whole request in one forward pass natively — 39.5 ms for one question against 158.6 ms for ten — and none of the exports here can:
+One can, and it was measured rather than reasoned about. Laya answers a whole request in one forward pass natively — 39.5 ms for one question against 158.6 ms for ten — and none of the exports here can:
 
 | | verdict | how it fails |
 | --- | --- | --- |
 | English q8 | **REFUSED** | broadcast error, `153 by 459` — 3 x 153 |
 | Specialised q8 | **REFUSED** | broadcast error, `70 by 560` — 8 x 70 |
 | Multilingual int8 | **DRIFTS** | accepts the batch, answers differ by up to 21 points |
-| Multilingual fp16 | untested | nothing couples the rows in fp16, so it may work |
+| **Multilingual fp16** | **EQUIVALENT** | worst shift 0.05 pp over 8 questions, and 1.37x faster |
+
+One of four can. Half precision has no activation scale to derive, so nothing couples the rows: eight questions batched against the same eight run alone moved probabilities by at most 0.05 of a percentage point, on an English and a Russian text alike, and ran in 490 ms against 673 ms. That is the whole prize — **1.37x**, not the order of magnitude the published GPU figures suggest, because on a CPU the matrix multiplies are already memory-bound and batching has little launch overhead left to amortise.
 
 The two ModernBERT exports bake a batch-1 constant even though the export script declares the batch axis dynamic — and the specialised one was traced with torch dynamo rather than TorchScript, which was the reason to expect it might differ. It did not. The multilingual int8 build does accept a batch, and that is worse: dynamic quantization derives activation scales per tensor, so a question's numbers depend on which others share the pass.
 

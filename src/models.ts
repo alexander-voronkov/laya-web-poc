@@ -142,11 +142,13 @@ export const MODELS: Record<ModelId, ModelSpec> = {
     // 647 MB graph + 34 MB tokenizer.
     nominalBytes: 681_200_000,
     languages: "multilingual",
-    // Untested. Unlike the int8 build there is no dynamic activation scale to couple
-    // the rows, so batching ought to be exact here -- but "ought to" is what was said
-    // about the English export before it refused a batch outright, so this stays false
-    // until somebody runs the comparison in scripts/batch-equivalence.mjs.
-    batchSafe: false,
+    // Measured: the only build here that can. Eight questions batched against the same
+    // eight run alone moved probabilities by at most 0.05 of a percentage point, on both
+    // an English and a Russian text -- against 21 points for the int8 build, which flips
+    // decisions. Half precision has no activation scale to derive, so nothing couples
+    // the rows. It is also faster batched: 673 ms one at a time against 490 ms for all
+    // eight.
+    batchSafe: true,
     requiresWebGPU: true,
     note:
       "Half precision, so no quantization loss at all -- the closest thing here to the " +
