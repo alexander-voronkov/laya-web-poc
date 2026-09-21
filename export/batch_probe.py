@@ -59,7 +59,10 @@ def main():
     ap.add_argument("--encoder")
     ap.add_argument("--head")
     ap.add_argument("--model", help="single-graph export instead of encoder+head")
-    ap.add_argument("--golden", default="golden/fixtures.json")
+    # ../golden/golden.json, not fixtures.json: the fixtures are inputs in plain text,
+    # and this needs the token ids and marker positions, which only the reference dump
+    # records. Run dump_golden.py first.
+    ap.add_argument("--golden", default="../golden/golden.json")
     ap.add_argument("--pad-id", type=int, default=50283)
     # 0.02 is the same bar verify_onnx.py holds quantization to. A batching scheme that
     # drifts more than the quantization does is not a scheme, it is a second model.
@@ -77,22 +80,21 @@ def main():
     # Real sequences rather than synthetic ids: a random draw from the vocabulary
     # produces activations nothing was trained on, and on a dynamically quantized graph
     # that exaggerates exactly the effect being measured.
+    if not os.path.exists(a.golden):
+        print(f"{a.golden} is missing; run dump_golden.py first", file=sys.stderr)
+        return 2
     with open(a.golden) as f:
-        cases = json.load(f)
+        gold = json.load(f)
     rows = []
-    for c in cases:
-        exp = c.get("expect") or {}
-        for qid, e in exp.items():
-            if "input_ids" not in e:
-                continue
-            qt = c["questions"][qid]["type"]
-            rows.append({"ids": e["input_ids"], "markers": e["marker_pos"],
-                         "qtype": QTYPES[qt], "k": len(e["marker_pos"])})
+    for c in gold["cases"]:
+        for q in c["questions"].values():
+            rows.append({"ids": q["input_ids"], "markers": q["marker_pos"],
+                         "qtype": q["qtype"], "k": q["k"]})
         if len(rows) >= 8:
             break
     rows = rows[:8]
     if len(rows) < 2:
-        print("need at least two fixtures with input_ids to compare", file=sys.stderr)
+        print("need at least two golden questions to compare", file=sys.stderr)
         return 2
     print(f"{len(rows)} questions, lengths {[len(r['ids']) for r in rows]}")
 
