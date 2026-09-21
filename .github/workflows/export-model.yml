@@ -38,6 +38,10 @@ on:
         description: "Re-trace with a real batch so the graph can answer several questions in one pass"
         type: boolean
         default: false
+      max_dp:
+        description: "Worst probability shift the parity gate allows. 0.02 is nvkudva's figure for a 421M encoder; a smaller one cannot reach it - see export/gate.py"
+        default: "0.02"
+        required: false
 
 jobs:
   export:
@@ -185,7 +189,11 @@ jobs:
         working-directory: pipeline/export
         env:
           SUF: ${{ inputs.precision }}
-        run: python verify_onnx.py --encoder "out/encoder_${SUF}.onnx" --head "out/head_${SUF}.onnx" --gate
+          MAXDP: ${{ inputs.max_dp }}
+        run: |
+          set -euo pipefail
+          cp $GITHUB_WORKSPACE/export/gate.py .
+          python gate.py --encoder "out/encoder_${SUF}.onnx" --head "out/head_${SUF}.onnx"             --max-dp "${MAXDP:-0.02}"
 
       # Whether the result can answer several questions in one pass is a property of
       # the export, and two of the three builds this project has used got it wrong in
