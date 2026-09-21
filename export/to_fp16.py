@@ -18,6 +18,7 @@ graphs still compose: the encoder's fp32 `hidden` is what the head expects.
 """
 import argparse
 import os
+import time
 import sys
 
 import onnx
@@ -59,8 +60,17 @@ def convert(src, out, block):
     #   ReduceMean/Pow/Sqrt/Div  layer norm's variance, where fp16 underflows on small
     #                       activations and the normalisation then divides by ~0
     #   Range/Cast          index arithmetic, which is not a quantity at all
+    #
+    # disable_shape_infer=True is not an optimisation, it is what makes this finish.
+    # With inference on, the converter re-runs onnx.shape_inference over the whole graph,
+    # and on the 1.7 GB encoder that took more than 84 minutes without producing a file --
+    # the first attempt at this was killed by the job timeout mid-conversion. The shapes
+    # are not needed here: keep_io_types pins the boundary, and the block list decides the
+    # rest by op type, which is a property of the node rather than of its shape.
+    t = time.time()
     fp16 = float16.convert_float_to_float16(
-        m, keep_io_types=True, disable_shape_infer=False, op_block_list=block)
+        m, keep_io_types=True, disable_shape_infer=True, op_block_list=block)
+    print("  converted in %.1f s" % (time.time() - t))
     size = save(fp16, out)
     print("%-24s %8.1f MB  ->  %-24s %8.1f MB" %
           (os.path.basename(src), before / 1e6, os.path.basename(out), size / 1e6))
