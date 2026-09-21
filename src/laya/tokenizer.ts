@@ -21,14 +21,14 @@ function tokenText(v: SpecialToken, field: string): string {
 }
 
 /** transformers.js tokenizer built straight from tokenizer.json -- no model needed. */
-export async function loadTokenizer(base: string, tokenizerPath = ""): Promise<Tok> {
+export async function loadTokenizer(base: string, tokenizerPath = "", signal?: AbortSignal): Promise<Tok> {
   const dir = tokenizerPath ? `${base}/${tokenizerPath}` : base;
   const [tj, tc] = await Promise.all([
-    fetch(`${dir}/tokenizer.json`).then((r) => {
+    fetch(`${dir}/tokenizer.json`, { signal }).then((r) => {
       if (!r.ok) throw new Error(`${dir}/tokenizer.json: ${r.status}`);
       return r.json();
     }),
-    fetch(`${dir}/tokenizer_config.json`).then((r) => {
+    fetch(`${dir}/tokenizer_config.json`, { signal }).then((r) => {
       if (!r.ok) throw new Error(`${dir}/tokenizer_config.json: ${r.status}`);
       return r.json();
     }),

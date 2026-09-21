@@ -8,6 +8,7 @@ import {
   type LoadProgress,
   type LoadStage,
 } from "./laya/session";
+import { BootRegistry } from "./laya/bootRegistry";
 import { MODELS, type ModelId, type ModelSpec } from "./models";
 
 export type Phase = "core" | "weights" | "ready" | "error";
@@ -36,7 +37,6 @@ interface Boot {
  *  than a single slot, because switching models and switching back should not pay for
  *  the weights twice in one session.
  */
-const boots = new Map<ModelId, Promise<Boot>>();
 const progressListeners = new Map<ModelId, ((p: LoadProgress) => void)[]>();
 const stageListeners = new Map<ModelId, ((s: LoadStage, ms: number) => void)[]>();
 // Replayed into late subscribers, so a remount does not show an empty progress list
@@ -57,14 +57,20 @@ const stagesOf = (id: ModelId) => {
   return seenStages.get(id)!;
 };
 
-function boot(spec: ModelSpec): Promise<Boot> {
-  const existing = boots.get(spec.id);
-  if (existing) return existing;
-  const p = (async () => {
-    const core = await loadCore(spec);
+/** One boot per model, kept at module scope and abandoned when nobody is waiting.
+ *
+ *  The registry holds both halves of that: a second mount joins the download in flight
+ *  rather than starting another, and switching away from a model that is still coming
+ *  down stops it instead of paying for weights nobody asked for. What it cannot undo is
+ *  a finished boot, which stays so that switching back is free. */
+const boots = new BootRegistry<Boot>(
+  async (id, signal) => {
+    const spec = MODELS[id as ModelId];
+    const core = await loadCore(spec, signal);
     const session = await LayaSession.load({
       spec,
       core,
+      signal,
       onProgress: (pr) => {
         progressOf(spec.id).set(pr.file, pr);
         for (const l of listOf(progressListeners, spec.id)) l(pr);
@@ -75,13 +81,18 @@ function boot(spec: ModelSpec): Promise<Boot> {
       },
     });
     return { core, session };
-  })();
-  boots.set(spec.id, p);
-  // A failed boot must not be cached, or the retry button silently re-serves the same
-  // rejection forever.
-  p.catch(() => { boots.delete(spec.id); });
-  return p;
-}
+  },
+  {
+    // The bytes of an abandoned download were dropped unwritten -- fetchCached only
+    // reaches the Cache API once a file is whole -- so the progress recorded for them
+    // has to go too, or the next attempt starts its bar part-filled from a download
+    // that no longer exists.
+    onAbandon: (id) => {
+      seenProgress.delete(id as ModelId);
+      seenStages.delete(id as ModelId);
+    },
+  },
+);
 
 export function useLaya(modelId: ModelId): LayaLoad & { retry: () => void } {
   const spec = MODELS[modelId];
@@ -127,7 +138,8 @@ export function useLaya(modelId: ModelId): LayaLoad & { retry: () => void } {
     listOf(progressListeners, spec.id).push(onProgress);
     listOf(stageListeners, spec.id).push(onStage);
 
-    boot(spec).then(
+    const held = boots.acquire(spec.id);
+    held.promise.then(
       ({ core: c, session: s }) => {
         if (!alive.current) return;
         setCore(c);
@@ -136,7 +148,11 @@ export function useLaya(modelId: ModelId): LayaLoad & { retry: () => void } {
         cachedWeights(spec).then((state) => { if (alive.current) setCache(state); });
       },
       (e: unknown) => {
-        if (!alive.current) return;
+        // An abandoned load is this component's own doing, not a fault to report --
+        // and a live component should not reach here at all, since abandoning happens
+        // only after its cleanup ran. Guarded anyway: were the bookkeeping ever wrong,
+        // the symptom would be a permanent error screen for a model that is fine.
+        if (!alive.current || (e as Error)?.name === "AbortError") return;
         setError(String((e as Error)?.message ?? e));
         setPhase("error");
       },
@@ -146,6 +162,7 @@ export function useLaya(modelId: ModelId): LayaLoad & { retry: () => void } {
       alive.current = false;
       progressListeners.set(spec.id, listOf(progressListeners, spec.id).filter((l) => l !== onProgress));
       stageListeners.set(spec.id, listOf(stageListeners, spec.id).filter((l) => l !== onStage));
+      held.release();
     };
   }, [spec, attempt]);
 

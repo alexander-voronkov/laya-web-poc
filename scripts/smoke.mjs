@@ -75,7 +75,7 @@ try {
   // Three seeded questions, one forward pass each.
   await page.waitForSelector(".ans-card", { timeout: 300_000 });
   await page.waitForFunction(
-    () => /done in|stopped:|failed on/.test(document.querySelector(".run-card span")?.textContent ?? ""),
+    () => /done in|stopped:|failed on/.test(document.querySelector(".run-card .run-status")?.textContent ?? ""),
     { timeout: 300_000 },
   );
   log(`run finished in ${Math.round((Date.now() - t0) / 1000)}s`);
@@ -96,7 +96,7 @@ try {
       [...r.children].map((c) => c.textContent?.trim()).join(" | "),
     ),
   );
-  const status = await page.locator(".run-card span").textContent();
+  const status = await page.locator(".run-card .run-status").textContent();
 
   await page.screenshot({ path: "shot-answers.png", fullPage: true });
 
